@@ -1,0 +1,41 @@
+# Carpetas
+__pycache__/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Archivos Python
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Resultados (se generan)
+results/
+*.png
+*.jpg
+
+# Datos (opcional)
+data/*.csv
+!README.md
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
