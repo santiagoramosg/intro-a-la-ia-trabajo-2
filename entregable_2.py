@@ -8,6 +8,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 from sklearn.tree import plot_tree
 
@@ -318,8 +319,456 @@ def graficar_funciones(knn,modelo, Columna_x, X, y):
 
 
 
-# Uso:
+#No supervisado
 
+from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score  
+try:
+    from kneed import KneeLocator
+except ImportError:
+    KneeLocator = None
+
+
+def prepare_kmeans_data(df, escalado, outliers, balanceo):
+    """Prepare the feature matrix for KMeans without using quality as input."""
+    df_processed = df.copy()
+    X = df_processed.drop('quality', axis=1)
+    y = df_processed['quality']
+
+    if outliers == 'no':
+        iso_forest = IsolationForest(contamination=0.05, random_state=41)
+        outlier_mask = iso_forest.fit_predict(X) == 1
+        X = X[outlier_mask].copy()
+        y = y[outlier_mask].copy()
+
+    scaler = None
+    if escalado == 'si':
+        scaler = StandardScaler()
+        X = pd.DataFrame(scaler.fit_transform(X), columns=X.columns, index=X.index)
+
+    if balanceo == 'si':
+        smote = SMOTE(random_state=41, k_neighbors=4)
+        X, y = smote.fit_resample(X, y)
+        X = pd.DataFrame(X, columns=X.columns)
+
+    return {
+        'X': X,
+        'y': y,
+        'scaler': scaler,
+        'feature_columns': list(X.columns),
+    }
+
+
+def _compute_kmeans_inertia(X, k_values, random_state=41):
+    inertia = []
+    for k in k_values:
+        kmeans = KMeans(n_clusters=k, random_state=random_state, n_init=10)
+        kmeans.fit(X)
+        inertia.append(kmeans.inertia_)
+    return inertia
+
+
+def _select_k_by_elbow(k_values, inertia, fallback_k):
+    if KneeLocator is None or len(k_values) < 2:
+        return fallback_k
+
+    locator = KneeLocator(k_values, inertia, curve='convex', direction='decreasing')
+    return locator.elbow if locator.elbow is not None else fallback_k
+
+
+def _compute_silhouette_scores(X, k_values, random_state=41):
+    silhouette_scores = []
+
+    for k in k_values:
+        kmeans = KMeans(n_clusters=k, random_state=random_state, n_init=10)
+        labels = kmeans.fit_predict(X)
+        silhouette_scores.append(silhouette_score(X, labels))
+
+    if silhouette_scores:
+        best_index = int(np.argmax(silhouette_scores))
+        selected_k = k_values[best_index]
+        selected_score = silhouette_scores[best_index]
+    else:
+        selected_k = None
+        selected_score = None
+
+    return silhouette_scores, selected_k, selected_score
+
+
+def train_kmeans_models(X, random_state=41, k_range=range(1, 11), silhouette_k_range=range(2, 11)):
+    X_train = X.copy() if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+    k_values = list(k_range)
+    silhouette_values = list(silhouette_k_range)
+
+    inertia = _compute_kmeans_inertia(X_train, k_values, random_state=random_state)
+    fallback_k = silhouette_values[0] if silhouette_values else (k_values[0] if k_values else 2)
+    elbow_k = _select_k_by_elbow(k_values, inertia, fallback_k)
+    silhouette_scores, silhouette_k, silhouette_best_score = _compute_silhouette_scores(
+        X_train,
+        silhouette_values,
+        random_state=random_state,
+    )
+
+    elbow_model = None
+    elbow_labels = None
+    elbow_silhouette = None
+    if elbow_k is not None:
+        elbow_model = KMeans(n_clusters=elbow_k, random_state=random_state, n_init=10)
+        elbow_labels = elbow_model.fit_predict(X_train)
+        if len(np.unique(elbow_labels)) > 1:
+            elbow_silhouette = silhouette_score(X_train, elbow_labels)
+
+    silhouette_model = None
+    silhouette_labels = None
+    silhouette_model_score = None
+    if silhouette_k is not None:
+        silhouette_model = KMeans(n_clusters=silhouette_k, random_state=random_state, n_init=10)
+        silhouette_labels = silhouette_model.fit_predict(X_train)
+        if len(np.unique(silhouette_labels)) > 1:
+            silhouette_model_score = silhouette_score(X_train, silhouette_labels)
+
+    return {
+        'k_values': k_values,
+        'silhouette_k_values': silhouette_values,
+        'inertia': inertia,
+        'silhouette_scores': silhouette_scores,
+        'selected_k_elbow': elbow_k,
+        'selected_k_silhouette': silhouette_k,
+        'selected_silhouette_score': silhouette_best_score,
+        'strategies': {
+            'elbow': {
+                'selected_k': elbow_k,
+                'inertia': elbow_model.inertia_ if elbow_model is not None else None,
+                'silhouette_score': elbow_silhouette,
+                'labels': elbow_labels,
+                'model': elbow_model,
+            },
+            'silhouette': {
+                'selected_k': silhouette_k,
+                'inertia': silhouette_model.inertia_ if silhouette_model is not None else None,
+                'silhouette_score': silhouette_model_score,
+                'labels': silhouette_labels,
+                'model': silhouette_model,
+            },
+        },
+    }
+
+
+def K_means(X, y):
+    return train_kmeans_models(X)
+
+
+def DBSCAN(X, y):
+    pass
+
+
+def _kmeans_preprocessing_label(params):
+    return f"CC(si), ED({params['escalado']}), outliers({params['outliers']}), balanceo({params['balanceo']})"
+
+
+def _fit_kmeans_variant(df, params, random_state=41):
+    prepared = prepare_kmeans_data(df, **params)
+    report = train_kmeans_models(prepared['X'], random_state=random_state)
+
+    best_strategy = report['strategies']['silhouette']
+    if best_strategy['model'] is None:
+        best_strategy = report['strategies']['elbow']
+
+    return {
+        'params': params,
+        'label': _kmeans_preprocessing_label(params),
+        'prepared': prepared,
+        'report': report,
+        'prediction_strategy': best_strategy,
+    }
+
+
+def _build_kmeans_summary_row(index, variant_result):
+    report = variant_result['report']
+    strategy = report['strategies']['silhouette']
+    if strategy['model'] is None:
+        strategy = report['strategies']['elbow']
+
+    return {
+        'Version': index,
+        'Preprocessing': variant_result['label'],
+        'KMeans inertia': round(strategy['inertia'], 4) if strategy['inertia'] is not None else None,
+        'KMeans silhouette_score': round(strategy['silhouette_score'], 4) if strategy['silhouette_score'] is not None else None,
+        'DBSCAN silhouette (future)': 'pendiente',
+    }
+
+
+def _build_kmeans_prediction_cases(df, variant_result, strategy_name, case_indices=(0, 1, 2)):
+    prepared = variant_result['prepared']
+    strategy = variant_result['report']['strategies'][strategy_name]
+    model = strategy['model']
+    if model is None:
+        return []
+
+    cases = []
+    for case_number, row_index in enumerate(case_indices, 1):
+        raw_row = df.iloc[[row_index]][prepared['feature_columns']].copy()
+        if prepared['scaler'] is not None:
+            row_for_model = pd.DataFrame(
+                prepared['scaler'].transform(raw_row),
+                columns=prepared['feature_columns'],
+                index=raw_row.index,
+            )
+        else:
+            row_for_model = raw_row.copy()
+
+        predicted_cluster = int(model.predict(row_for_model)[0])
+        centroid_distances = model.transform(row_for_model)[0].round(4).tolist()
+
+        cases.append({
+            'strategy': strategy_name,
+            'case': case_number,
+            'row_index': int(df.index[row_index]),
+            'predicted_cluster': predicted_cluster,
+            'distances_to_centroids': centroid_distances,
+        })
+
+    return cases
+
+
+def generar_reporte_kmeans(df, variaciones, case_indices=(0, 1, 2)):
+    variant_results = []
+    summary_rows = []
+
+    for index, params in enumerate(variaciones, 1):
+        variant_result = _fit_kmeans_variant(df, params)
+        elbow_predictions = _build_kmeans_prediction_cases(df, variant_result, 'elbow', case_indices=case_indices)
+        silhouette_predictions = _build_kmeans_prediction_cases(df, variant_result, 'silhouette', case_indices=case_indices)
+        variant_result['predictions_by_strategy'] = {
+            'elbow': elbow_predictions,
+            'silhouette': silhouette_predictions,
+        }
+        variant_result['predictions'] = elbow_predictions + silhouette_predictions
+        variant_results.append(variant_result)
+        summary_rows.append(_build_kmeans_summary_row(index, variant_result))
+
+    summary_df = pd.DataFrame(summary_rows)
+    return summary_df, variant_results
+
+
+def graficar_silhouette_kmeans(variant_results):
+    labels = [f'V{i}' for i in range(1, len(variant_results) + 1)]
+    scores = []
+
+    for variant_result in variant_results:
+        strategy = variant_result['report']['strategies']['silhouette']
+        if strategy['silhouette_score'] is None:
+            strategy = variant_result['report']['strategies']['elbow']
+        scores.append(strategy['silhouette_score'] if strategy['silhouette_score'] is not None else 0)
+
+    plt.figure(figsize=(10, 5))
+    plt.bar(labels, scores, color='steelblue')
+    plt.title('KMeans silhouette score por variación')
+    plt.xlabel('Variación')
+    plt.ylabel('Silhouette score')
+    plt.ylim(0, 1)
+    plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
+def graficar_elbow_comparativo_kmeans(variant_results):
+    if not variant_results:
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+    cmap = plt.get_cmap('tab10')
+
+    all_k_values = set()
+    for index, variant_result in enumerate(variant_results, 1):
+        report = variant_result['report']
+        k_values = report['k_values']
+        inertia = report['inertia']
+        selected_k = report['selected_k_elbow']
+        color = cmap((index - 1) % 10)
+
+        all_k_values.update(k_values)
+        legend_label = f"V{index}" if selected_k is None else f"V{index} (K={selected_k})"
+
+        ax.plot(
+            k_values,
+            inertia,
+            marker='o',
+            linewidth=1.8,
+            markersize=4,
+            label=legend_label,
+            color=color,
+            alpha=0.85,
+        )
+
+        if selected_k in k_values:
+            selected_index = k_values.index(selected_k)
+            ax.scatter(
+                [selected_k],
+                [inertia[selected_index]],
+                color=color,
+                s=55,
+                zorder=5,
+                edgecolors='black',
+                linewidths=0.5,
+            )
+
+    ax.set_title('Comparativa de curvas elbow de KMeans por variación')
+    ax.set_xlabel('K values')
+    ax.set_ylabel('Inertia')
+    ax.set_xticks(sorted(all_k_values))
+    ax.grid(axis='y', alpha=0.3)
+    ax.legend(ncol=2, fontsize=8)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def graficar_clusters_pca_kmeans(variant_results):
+    if not variant_results:
+        return
+
+    n_rows = len(variant_results)
+    fig, axes = plt.subplots(n_rows, 2, figsize=(18, 4 * n_rows), sharex=True, sharey=True)
+    if n_rows == 1:
+        axes = np.array([axes])
+
+    strategy_info = [
+        ('elbow', 'Elbow'),
+        ('silhouette', 'Silhouette'),
+    ]
+    cmap = plt.get_cmap('tab10')
+
+    for row_index, variant_result in enumerate(variant_results):
+        prepared = variant_result['prepared']
+        X_variant = prepared['X']
+        X_variant_matrix = X_variant.to_numpy() if isinstance(X_variant, pd.DataFrame) else np.asarray(X_variant)
+        pca = PCA(n_components=2)
+        X_pca = pca.fit_transform(X_variant_matrix)
+
+        for col_index, (strategy_name, strategy_title) in enumerate(strategy_info):
+            ax = axes[row_index, col_index]
+            strategy = variant_result['report']['strategies'][strategy_name]
+            model = strategy['model']
+            labels = strategy['labels']
+
+            if model is None or labels is None:
+                ax.set_axis_off()
+                continue
+
+            labels = np.asarray(labels)
+            unique_labels = np.unique(labels)
+            for cluster_id in unique_labels:
+                cluster_mask = labels == cluster_id
+                ax.scatter(
+                    X_pca[cluster_mask, 0],
+                    X_pca[cluster_mask, 1],
+                    s=8,
+                    alpha=0.65,
+                    color=cmap(int(cluster_id) % 10),
+                    edgecolors='none',
+                )
+
+            centroid_pca = pca.transform(model.cluster_centers_)
+            ax.scatter(
+                centroid_pca[:, 0],
+                centroid_pca[:, 1],
+                s=140,
+                c='black',
+                marker='X',
+                edgecolors='white',
+                linewidths=0.8,
+                zorder=5,
+            )
+
+            selected_k = strategy['selected_k']
+            ax.set_title(f"V{row_index + 1} - {strategy_title} (K={selected_k})", fontsize=9)
+            if row_index == n_rows - 1:
+                ax.set_xlabel('PC1')
+            if col_index == 0:
+                ax.set_ylabel('PC2')
+            ax.grid(alpha=0.2)
+            ax.tick_params(labelsize=7)
+
+    fig.suptitle('KMeans clusters projected with PCA (8 variants x 2 strategies)', fontsize=14)
+    plt.tight_layout(rect=[0, 0.02, 1, 0.98])
+    plt.show()
+
+
+def graficar_comparativa_kmeans(variant_results):
+    labels = [f'V{i}' for i in range(1, len(variant_results) + 1)]
+    x = np.arange(len(labels))
+    width = 0.35
+
+    elbow_scores = []
+    silhouette_scores = []
+    elbow_ks = []
+    silhouette_ks = []
+
+    for variant_result in variant_results:
+        elbow = variant_result['report']['strategies']['elbow']
+        silhouette = variant_result['report']['strategies']['silhouette']
+
+        elbow_scores.append(elbow['silhouette_score'] if elbow['silhouette_score'] is not None else 0)
+        silhouette_scores.append(silhouette['silhouette_score'] if silhouette['silhouette_score'] is not None else 0)
+        elbow_ks.append(elbow['selected_k'])
+        silhouette_ks.append(silhouette['selected_k'])
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
+
+    axes[0].bar(x - width / 2, elbow_scores, width, label='Elbow / KneeLocator', color='darkorange')
+    axes[0].bar(x + width / 2, silhouette_scores, width, label='Best silhouette', color='seagreen')
+    axes[0].set_ylabel('Silhouette score')
+    axes[0].set_title('Comparativa de estrategias KMeans por variación')
+    axes[0].legend()
+    axes[0].grid(axis='y', alpha=0.3)
+
+    axes[1].plot(labels, elbow_ks, marker='o', linewidth=2, label='K seleccionado por elbow', color='darkorange')
+    axes[1].plot(labels, silhouette_ks, marker='o', linewidth=2, label='K seleccionado por silhouette', color='seagreen')
+    axes[1].set_xlabel('Variación')
+    axes[1].set_ylabel('K seleccionado')
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(labels)
+    axes[1].legend()
+    axes[1].grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def mostrar_predicciones_kmeans(variant_results):
+    for index, variant_result in enumerate(variant_results, 1):
+        print(f"\nPredicciones KMeans - Variación {index}: {variant_result['label']}")
+        grouped_predictions = variant_result.get('predictions_by_strategy', {})
+        if not grouped_predictions:
+            grouped_predictions = {}
+            for case in variant_result.get('predictions', []):
+                grouped_predictions.setdefault(case['strategy'], []).append(case)
+
+        for strategy_name, cases in grouped_predictions.items():
+            print(f"  Estrategia {strategy_name}:")
+            for case in cases:
+                print(
+                    f"    Caso {case['case']} (fila {case['row_index']}): "
+                    f"cluster={case['predicted_cluster']}, distancias={case['distances_to_centroids']}"
+                )
+
+
+def ejecutar_flujo_kmeans(df, variaciones):
+    print("\n\nFIGURA 3 - Resumen KMeans por variación")
+    summary_df, variant_results = generar_reporte_kmeans(df, variaciones)
+    print(summary_df)
+
+    graficar_clusters_pca_kmeans(variant_results)
+    graficar_silhouette_kmeans(variant_results)
+    graficar_elbow_comparativo_kmeans(variant_results)
+    graficar_comparativa_kmeans(variant_results)
+    mostrar_predicciones_kmeans(variant_results)
+
+    return summary_df, variant_results
+
+
+# Uso:
 
 
 
@@ -361,40 +810,6 @@ if __name__ == "__main__":
     
     #graficar arbol y knn de la variacion 1
     graficar_funciones(knn_modelv1, modelov1, Columna_xv1, Xv1, yv1)
-
-    #No supervisado
-
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
-from sklearn.metrics import silhouette_score  
-from kneed import KneeLocator
-
-def K_means(X,y):
-    inertia = []
-    K_range = range(1, 11)
-
-    for k in K_range:
-        kmeans = KMeans(n_clusters=k, random_state=41, n_init=10)
-        kmeans.fit(X)
-        inertia.append(kmeans.inertia_)   # Métrica Inercia.
-
     
-    kl = KneeLocator(K_range, inertia, curve='convex', direction='decreasing')
-
-    print(f"El valor de K óptimo calculado automáticamente es: {kl.elbow}")
-
-    
-    kl.plot_knee()
-    plt.show()
-
-    silhouette_scores = []
-
-    for k in range(2, 11):
-        kmeans = KMeans(n_clusters=k, random_state=41, n_init=10)
-        labels = kmeans.fit_predict(X)
-        score = silhouette_score(X, labels)
-        silhouette_scores.append(score)
-    pass
-    
-def DBSCAN(X,y):
-    pass
+    # flujo KMeans
+    ejecutar_flujo_kmeans(df, variaciones)
