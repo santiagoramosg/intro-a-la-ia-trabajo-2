@@ -8,7 +8,8 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.cluster import KMeans
+from sklearn.neighbors import NearestNeighbors
+from sklearn.cluster import KMeans, DBSCAN as SklearnDBSCAN
 import matplotlib.pyplot as plt
 from sklearn.tree import plot_tree
 
@@ -329,17 +330,19 @@ except ImportError:
     KneeLocator = None
 
 
-def prepare_kmeans_data(df, escalado, outliers, balanceo):
-    """Prepare the feature matrix for KMeans without using quality as input."""
+def prepare_unsupervised_data(df, escalado, outliers, balanceo):
+    """Prepare the feature matrix for unsupervised models without using quality as input."""
     df_processed = df.copy()
     X = df_processed.drop('quality', axis=1)
     y = df_processed['quality']
+    source_indices = np.asarray(X.index)
 
     if outliers == 'no':
         iso_forest = IsolationForest(contamination=0.05, random_state=41)
         outlier_mask = iso_forest.fit_predict(X) == 1
         X = X[outlier_mask].copy()
         y = y[outlier_mask].copy()
+        source_indices = source_indices[outlier_mask]
 
     scaler = None
     if escalado == 'si':
@@ -348,16 +351,23 @@ def prepare_kmeans_data(df, escalado, outliers, balanceo):
 
     if balanceo == 'si':
         smote = SMOTE(random_state=41, k_neighbors=4)
-        X, y = smote.fit_resample(X, y)
-        X = pd.DataFrame(X, columns=X.columns)
+        X_resampled, y_resampled = smote.fit_resample(X, y)
+        X = pd.DataFrame(X_resampled, columns=X.columns)
+        synthetic_count = len(X) - len(source_indices)
+        if synthetic_count > 0:
+            source_indices = np.concatenate([
+                source_indices,
+                np.full(synthetic_count, -1, dtype=int),
+            ])
+        y = y_resampled
 
     return {
         'X': X,
         'y': y,
         'scaler': scaler,
         'feature_columns': list(X.columns),
+        'source_indices': source_indices,
     }
-
 
 def _compute_kmeans_inertia(X, k_values, random_state=41):
     inertia = []
@@ -459,7 +469,112 @@ def K_means(X, y):
 
 
 def DBSCAN(X, y):
-    pass
+    return train_dbscan_model(X)
+
+
+def _as_numpy_matrix(X):
+    if isinstance(X, pd.DataFrame):
+        return X.to_numpy()
+    return np.asarray(X)
+
+
+def _safe_dbscan_silhouette_score(X, labels, noise_label=-1):
+    X_matrix = _as_numpy_matrix(X)
+    labels = np.asarray(labels)
+    usable_mask = labels != noise_label
+    usable_labels = labels[usable_mask]
+
+    if usable_labels.size == 0:
+        return None
+
+    unique_labels = np.unique(usable_labels)
+    if unique_labels.size < 2:
+        return None
+
+    X_usable = X_matrix[usable_mask]
+    if X_usable.shape[0] <= unique_labels.size:
+        return None
+
+    try:
+        return silhouette_score(X_usable, usable_labels)
+    except ValueError:
+        return None
+
+
+def _estimate_dbscan_eps(X, min_samples, fallback_percentile=90):
+    X_matrix = _as_numpy_matrix(X)
+    n_samples = X_matrix.shape[0]
+
+    if n_samples == 0:
+        return 0.5, np.array([])
+
+    n_neighbors = max(1, min(int(min_samples), n_samples))
+    neighbors = NearestNeighbors(n_neighbors=n_neighbors)
+    neighbors.fit(X_matrix)
+    distances, _ = neighbors.kneighbors(X_matrix)
+    k_distances = np.sort(distances[:, -1])
+
+    eps = None
+    if KneeLocator is not None and len(k_distances) >= 3:
+        x_values = np.arange(1, len(k_distances) + 1)
+        locator = KneeLocator(x_values, k_distances, curve='convex', direction='increasing')
+        if locator.knee is not None:
+            knee_index = int(locator.knee) - 1
+            if 0 <= knee_index < len(k_distances):
+                eps = float(k_distances[knee_index])
+
+    if eps is None:
+        eps = float(np.percentile(k_distances, fallback_percentile))
+
+    if not np.isfinite(eps) or eps <= 0:
+        positive_distances = k_distances[k_distances > 0]
+        eps = float(np.max(positive_distances)) if positive_distances.size else 1e-6
+
+    return max(eps, 1e-6), k_distances
+
+
+def train_dbscan_model(X, min_samples=None):
+    X_matrix = _as_numpy_matrix(X)
+    if X_matrix.size == 0:
+        return {
+            'model': None,
+            'labels': np.array([]),
+            'eps': None,
+            'min_samples': None,
+            'cluster_labels': [],
+            'cluster_count': 0,
+            'noise_count': 0,
+            'silhouette_score': None,
+            'k_distances': np.array([]),
+        }
+
+    n_samples, feature_count = X_matrix.shape
+    if min_samples is None:
+        min_samples = max(3, feature_count + 1)
+    min_samples = int(min_samples)
+    min_samples = min(min_samples, n_samples)
+    min_samples = max(2, min_samples) if n_samples >= 2 else n_samples
+
+    eps, k_distances = _estimate_dbscan_eps(X_matrix, min_samples)
+    model = SklearnDBSCAN(eps=eps, min_samples=min_samples)
+    labels = model.fit_predict(X_matrix)
+
+    cluster_labels = sorted(int(label) for label in np.unique(labels) if label != -1)
+    cluster_count = len(cluster_labels)
+    noise_count = int(np.sum(labels == -1))
+    dbscan_silhouette = _safe_dbscan_silhouette_score(X_matrix, labels)
+
+    return {
+        'model': model,
+        'labels': labels,
+        'eps': eps,
+        'min_samples': min_samples,
+        'cluster_labels': cluster_labels,
+        'cluster_count': cluster_count,
+        'noise_count': noise_count,
+        'silhouette_score': dbscan_silhouette,
+        'k_distances': k_distances,
+    }
 
 
 def _kmeans_preprocessing_label(params):
@@ -467,7 +582,7 @@ def _kmeans_preprocessing_label(params):
 
 
 def _fit_kmeans_variant(df, params, random_state=41):
-    prepared = prepare_kmeans_data(df, **params)
+    prepared = prepare_unsupervised_data(df, **params)
     report = train_kmeans_models(prepared['X'], random_state=random_state)
 
     best_strategy = report['strategies']['silhouette']
@@ -494,7 +609,23 @@ def _build_kmeans_summary_row(index, variant_result):
         'Preprocessing': variant_result['label'],
         'KMeans inertia': round(strategy['inertia'], 4) if strategy['inertia'] is not None else None,
         'KMeans silhouette_score': round(strategy['silhouette_score'], 4) if strategy['silhouette_score'] is not None else None,
-        'DBSCAN silhouette (future)': 'pendiente',
+    }
+
+
+def _build_dbscan_summary_row(index, variant_result):
+    report = variant_result['dbscan_report']
+    labels = np.asarray(report['labels'])
+    unique_labels = sorted(int(label) for label in np.unique(labels))
+
+    return {
+        'Version': index,
+        'Preprocessing': variant_result['label'],
+        'DBSCAN eps': round(report['eps'], 4) if report['eps'] is not None else None,
+        'DBSCAN min_samples': int(report['min_samples']) if report['min_samples'] is not None else None,
+        'DBSCAN labels': unique_labels,
+        'DBSCAN cluster_count': int(report['cluster_count']),
+        'DBSCAN noise_count': int(report['noise_count']),
+        'DBSCAN silhouette_score': round(report['silhouette_score'], 4) if report['silhouette_score'] is not None else None,
     }
 
 
@@ -531,6 +662,34 @@ def _build_kmeans_prediction_cases(df, variant_result, strategy_name, case_indic
     return cases
 
 
+def _build_dbscan_case_reports(df, variant_result, case_count=3):
+    prepared = variant_result['prepared']
+    labels = np.asarray(variant_result['dbscan_report']['labels'])
+    source_indices = np.asarray(prepared['source_indices'])
+
+    valid_positions = np.flatnonzero(source_indices >= 0)
+    selected_positions = list(valid_positions[:case_count])
+
+    if len(selected_positions) < case_count:
+        for position in range(len(labels)):
+            if position not in selected_positions and source_indices[position] >= 0:
+                selected_positions.append(position)
+            if len(selected_positions) == case_count:
+                break
+
+    cases = []
+    for case_number, position in enumerate(selected_positions[:case_count], 1):
+        cases.append({
+            'case': case_number,
+            'source_row_index': int(source_indices[position]),
+            'prepared_position': int(position),
+            'dbscan_label': int(labels[position]),
+            'is_noise': bool(labels[position] == -1),
+        })
+
+    return cases
+
+
 def generar_reporte_kmeans(df, variaciones, case_indices=(0, 1, 2)):
     variant_results = []
     summary_rows = []
@@ -546,6 +705,25 @@ def generar_reporte_kmeans(df, variaciones, case_indices=(0, 1, 2)):
         variant_result['predictions'] = elbow_predictions + silhouette_predictions
         variant_results.append(variant_result)
         summary_rows.append(_build_kmeans_summary_row(index, variant_result))
+
+    summary_df = pd.DataFrame(summary_rows)
+    return summary_df, variant_results
+
+
+def generar_reporte_no_supervisado(df, variaciones, case_indices=(0, 1, 2)):
+    variant_results = []
+    summary_rows = []
+
+    for index, params in enumerate(variaciones, 1):
+        variant_result = _fit_kmeans_variant(df, params)
+        dbscan_report = train_dbscan_model(variant_result['prepared']['X'])
+        variant_result['dbscan_report'] = dbscan_report
+        variant_result['dbscan_predictions'] = _build_dbscan_case_reports(df, variant_result, case_count=len(case_indices))
+        variant_results.append(variant_result)
+        summary_rows.append({
+            **_build_kmeans_summary_row(index, variant_result),
+            **_build_dbscan_summary_row(index, variant_result),
+        })
 
     summary_df = pd.DataFrame(summary_rows)
     return summary_df, variant_results
@@ -567,6 +745,25 @@ def graficar_silhouette_kmeans(variant_results):
     plt.xlabel('Variación')
     plt.ylabel('Silhouette score')
     plt.ylim(0, 1)
+    plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
+def graficar_silhouette_dbscan(variant_results):
+    labels = [f'V{i}' for i in range(1, len(variant_results) + 1)]
+    scores = []
+
+    for variant_result in variant_results:
+        score = variant_result['dbscan_report']['silhouette_score']
+        scores.append(score if score is not None else 0)
+
+    plt.figure(figsize=(10, 5))
+    plt.bar(labels, scores, color='mediumpurple')
+    plt.title('DBSCAN silhouette score por variación')
+    plt.xlabel('Variación')
+    plt.ylabel('Silhouette score')
+    plt.ylim(-1, 1)
     plt.grid(axis='y', alpha=0.3)
     plt.tight_layout()
     plt.show()
@@ -695,44 +892,72 @@ def graficar_clusters_pca_kmeans(variant_results):
     plt.show()
 
 
-def graficar_comparativa_kmeans(variant_results):
-    labels = [f'V{i}' for i in range(1, len(variant_results) + 1)]
-    x = np.arange(len(labels))
-    width = 0.35
+def graficar_clusters_pca_dbscan(variant_results):
+    if not variant_results:
+        return
 
-    elbow_scores = []
-    silhouette_scores = []
-    elbow_ks = []
-    silhouette_ks = []
+    n_rows = len(variant_results)
+    fig, axes = plt.subplots(n_rows, 1, figsize=(14, 4 * n_rows), sharex=True, sharey=True)
+    if n_rows == 1:
+        axes = np.array([axes])
 
-    for variant_result in variant_results:
-        elbow = variant_result['report']['strategies']['elbow']
-        silhouette = variant_result['report']['strategies']['silhouette']
+    cmap = plt.get_cmap('tab10')
 
-        elbow_scores.append(elbow['silhouette_score'] if elbow['silhouette_score'] is not None else 0)
-        silhouette_scores.append(silhouette['silhouette_score'] if silhouette['silhouette_score'] is not None else 0)
-        elbow_ks.append(elbow['selected_k'])
-        silhouette_ks.append(silhouette['selected_k'])
+    for row_index, variant_result in enumerate(variant_results):
+        prepared = variant_result['prepared']
+        X_variant = prepared['X']
+        X_variant_matrix = X_variant.to_numpy() if isinstance(X_variant, pd.DataFrame) else np.asarray(X_variant)
+        if X_variant_matrix.shape[1] >= 2:
+            pca = PCA(n_components=2)
+            X_pca = pca.fit_transform(X_variant_matrix)
+        else:
+            X_pca = np.column_stack([X_variant_matrix[:, 0], np.zeros(X_variant_matrix.shape[0])])
 
-    fig, axes = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
+        report = variant_result['dbscan_report']
+        labels = np.asarray(report['labels'])
+        ax = axes[row_index]
 
-    axes[0].bar(x - width / 2, elbow_scores, width, label='Elbow / KneeLocator', color='darkorange')
-    axes[0].bar(x + width / 2, silhouette_scores, width, label='Best silhouette', color='seagreen')
-    axes[0].set_ylabel('Silhouette score')
-    axes[0].set_title('Comparativa de estrategias KMeans por variación')
-    axes[0].legend()
-    axes[0].grid(axis='y', alpha=0.3)
+        if labels.size == 0:
+            ax.set_axis_off()
+            continue
 
-    axes[1].plot(labels, elbow_ks, marker='o', linewidth=2, label='K seleccionado por elbow', color='darkorange')
-    axes[1].plot(labels, silhouette_ks, marker='o', linewidth=2, label='K seleccionado por silhouette', color='seagreen')
-    axes[1].set_xlabel('Variación')
-    axes[1].set_ylabel('K seleccionado')
-    axes[1].set_xticks(x)
-    axes[1].set_xticklabels(labels)
-    axes[1].legend()
-    axes[1].grid(axis='y', alpha=0.3)
+        unique_labels = sorted(np.unique(labels), key=lambda value: (value == -1, value))
+        for cluster_id in unique_labels:
+            cluster_mask = labels == cluster_id
+            if cluster_id == -1:
+                ax.scatter(
+                    X_pca[cluster_mask, 0],
+                    X_pca[cluster_mask, 1],
+                    s=22,
+                    alpha=0.9,
+                    color='black',
+                    marker='x',
+                    label='Ruido',
+                )
+            else:
+                ax.scatter(
+                    X_pca[cluster_mask, 0],
+                    X_pca[cluster_mask, 1],
+                    s=18,
+                    alpha=0.7,
+                    color=cmap(int(cluster_id) % 10),
+                    edgecolors='none',
+                    label=f'Clúster {int(cluster_id)}',
+                )
 
-    plt.tight_layout()
+        ax.set_title(
+            f"V{row_index + 1} - DBSCAN (eps={report['eps']:.3f}, min_samples={report['min_samples']})",
+            fontsize=9,
+        )
+        if row_index == n_rows - 1:
+            ax.set_xlabel('PC1')
+        ax.set_ylabel('PC2')
+        ax.grid(alpha=0.2)
+        ax.tick_params(labelsize=7)
+        ax.legend(fontsize=7, ncol=2, loc='best')
+
+    fig.suptitle('Clústeres de DBSCAN proyectados con PCA (8 variantes)', fontsize=14)
+    plt.tight_layout(rect=[0, 0.02, 1, 0.98])
     plt.show()
 
 
@@ -754,16 +979,62 @@ def mostrar_predicciones_kmeans(variant_results):
                 )
 
 
+def mostrar_predicciones_dbscan(variant_results):
+    for index, variant_result in enumerate(variant_results, 1):
+        print(f"\nPredicciones DBSCAN - Variación {index}: {variant_result['label']}")
+        for case in variant_result.get('dbscan_predictions', []):
+            print(
+                f"  Caso {case['case']} (fila original {case['source_row_index']}): "
+                f"label={case['dbscan_label']}, ruido={case['is_noise']}"
+            )
+
+
+def mostrar_analisis_resultados_no_supervisados(summary_df, variant_results):
+    kmeans_scores = []
+    dbscan_scores = []
+
+    for variant_result in variant_results:
+        kmeans_strategy = variant_result['report']['strategies']['silhouette']
+        if kmeans_strategy['silhouette_score'] is None:
+            kmeans_strategy = variant_result['report']['strategies']['elbow']
+        if kmeans_strategy['silhouette_score'] is not None:
+            kmeans_scores.append((variant_result['label'], kmeans_strategy['silhouette_score']))
+
+        dbscan_score = variant_result['dbscan_report']['silhouette_score']
+        if dbscan_score is not None:
+            dbscan_scores.append((variant_result['label'], dbscan_score))
+
+    best_kmeans = max(kmeans_scores, key=lambda item: item[1]) if kmeans_scores else None
+    best_dbscan = max(dbscan_scores, key=lambda item: item[1]) if dbscan_scores else None
+    invalid_dbscan = len(variant_results) - len(dbscan_scores)
+
+    print("\nANÁLISIS RÁPIDO")
+    if best_kmeans is not None:
+        print(f"- Mejor KMeans silhouette: {best_kmeans[0]} ({best_kmeans[1]:.4f})")
+    else:
+        print("- Mejor KMeans silhouette: no disponible")
+
+    if best_dbscan is not None:
+        print(f"- Mejor DBSCAN silhouette: {best_dbscan[0]} ({best_dbscan[1]:.4f})")
+    else:
+        print("- Mejor DBSCAN silhouette: no disponible")
+
+    print(f"- DBSCAN sin silhouette válida: {invalid_dbscan}/{len(variant_results)} variantes")
+
+
 def ejecutar_flujo_kmeans(df, variaciones):
-    print("\n\nFIGURA 3 - Resumen KMeans por variación")
-    summary_df, variant_results = generar_reporte_kmeans(df, variaciones)
+    print("\n\nFIGURA 3 - Resumen No Supervisado por variación")
+    summary_df, variant_results = generar_reporte_no_supervisado(df, variaciones)
     print(summary_df)
 
     graficar_clusters_pca_kmeans(variant_results)
+    graficar_clusters_pca_dbscan(variant_results)
     graficar_silhouette_kmeans(variant_results)
+    graficar_silhouette_dbscan(variant_results)
     graficar_elbow_comparativo_kmeans(variant_results)
-    graficar_comparativa_kmeans(variant_results)
     mostrar_predicciones_kmeans(variant_results)
+    mostrar_predicciones_dbscan(variant_results)
+    mostrar_analisis_resultados_no_supervisados(summary_df, variant_results)
 
     return summary_df, variant_results
 
