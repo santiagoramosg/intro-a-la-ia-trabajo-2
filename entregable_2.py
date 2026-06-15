@@ -713,9 +713,7 @@ def _fit_kmeans_variant(df, params, random_state=41):
 
 def _build_kmeans_summary_row(index, variant_result):
     report = variant_result['report']
-    strategy = report['strategies']['silhouette']
-    if strategy['model'] is None:
-        strategy = report['strategies']['elbow']
+    strategy_name, strategy = _select_kmeans_strategy(report)
 
     return {
         'Version': index,
@@ -723,6 +721,89 @@ def _build_kmeans_summary_row(index, variant_result):
         'KMeans inertia': round(strategy['inertia'], 4) if strategy['inertia'] is not None else None,
         'KMeans silhouette_score': round(strategy['silhouette_score'], 4) if strategy['silhouette_score'] is not None else None,
     }
+
+
+def _select_kmeans_strategy(report):
+    strategy_name = 'silhouette'
+    strategy = report['strategies'][strategy_name]
+
+    if strategy['model'] is None:
+        strategy_name = 'elbow'
+        strategy = report['strategies'][strategy_name]
+
+    return strategy_name, strategy
+
+
+def _build_cluster_member_frame(df, prepared, labels):
+    source_indices = np.asarray(prepared['source_indices'])
+    labels = np.asarray(labels)
+
+    valid_mask = source_indices != -1
+    if not np.any(valid_mask):
+        return pd.DataFrame(columns=list(df.columns) + ['cluster'])
+
+    valid_source_indices = source_indices[valid_mask].astype(int)
+    valid_labels = labels[valid_mask]
+
+    cluster_frame = df.iloc[valid_source_indices].copy()
+    cluster_frame['cluster'] = valid_labels
+    return cluster_frame
+
+
+def _print_cluster_crosstabs(df, prepared, labels, title, type_label_map=None):
+    cluster_frame = _build_cluster_member_frame(df, prepared, labels)
+
+    print(f"\n{title}")
+    if cluster_frame.empty:
+        print("No eligible original rows available for cross-tabs.")
+        return
+
+    quality_table = pd.crosstab(cluster_frame['cluster'], cluster_frame['quality'])
+    print("Cluster vs quality:")
+    print(quality_table.to_string())
+
+    type_series = cluster_frame['type']
+    if type_label_map is not None:
+        type_series = type_series.map(type_label_map).fillna(type_series)
+
+    type_table = pd.crosstab(cluster_frame['cluster'], type_series)
+    print("Cluster vs type:")
+    print(type_table.to_string())
+
+
+def mostrar_tablas_cruzadas_clustering(df, variant_results):
+    for index, variant_result in enumerate(variant_results, 1):
+        prepared = variant_result['prepared']
+        type_label_map = {0: 'white', 1: 'red'}
+
+        strategy_name, strategy = _select_kmeans_strategy(variant_result['report'])
+        if strategy['labels'] is not None:
+            kmeans_title = (
+                f"KMeans cross-tabs - Variación {index}: {variant_result['label']} "
+                f"({strategy_name}, K={strategy['selected_k']})"
+            )
+            _print_cluster_crosstabs(
+                df,
+                prepared,
+                strategy['labels'],
+                kmeans_title,
+                type_label_map=type_label_map,
+            )
+
+        dbscan_report = variant_result.get('dbscan_report', {})
+        if dbscan_report.get('labels') is not None:
+            eps_label = f"{dbscan_report['eps']:.4f}" if dbscan_report.get('eps') is not None else 'N/D'
+            dbscan_title = (
+                f"DBSCAN cross-tabs - Variación {index}: {variant_result['label']} "
+                f"(eps={eps_label}, min_samples={dbscan_report.get('min_samples')})"
+            )
+            _print_cluster_crosstabs(
+                df,
+                prepared,
+                dbscan_report['labels'],
+                dbscan_title,
+                type_label_map=type_label_map,
+            )
 
 
 def _build_dbscan_summary_row(index, variant_result):
@@ -1188,6 +1269,7 @@ def ejecutar_flujo_nosupervisado(df, variaciones):
     mostrar_predicciones_kmeans(variant_results)
     mostrar_predicciones_dbscan(variant_results)
     mostrar_candidatos_dbscan(variant_results)
+    mostrar_tablas_cruzadas_clustering(df, variant_results)
     mostrar_analisis_resultados_no_supervisados(summary_df, variant_results)
 
     return summary_df, variant_results
