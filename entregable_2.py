@@ -533,6 +533,85 @@ def _estimate_dbscan_eps(X, min_samples, fallback_percentile=90):
     return max(eps, 1e-6), k_distances
 
 
+def _build_dbscan_eps_candidates(estimated_eps, k_distances, fallback_percentile=90):
+    candidate_map = {}
+
+    def _add_candidate(value, source):
+        if value is None:
+            return
+        if not np.isfinite(value) or value <= 0:
+            return
+
+        key = round(float(value), 6)
+        entry = candidate_map.setdefault(key, {'eps': float(value), 'sources': []})
+        if source not in entry['sources']:
+            entry['sources'].append(source)
+
+    _add_candidate(estimated_eps, 'estimado')
+
+    if estimated_eps is not None and np.isfinite(estimated_eps) and estimated_eps > 0:
+        for factor in (0.75, 0.9, 1.0, 1.1, 1.25):
+            _add_candidate(estimated_eps * factor, f'multiplicador x{factor}')
+
+    k_distances = np.asarray(k_distances)
+    if k_distances.size:
+        for percentile in (80, 85, 90, 95):
+            _add_candidate(np.percentile(k_distances, percentile), f'percentil {percentile}')
+
+    if not candidate_map and k_distances.size:
+        _add_candidate(np.percentile(k_distances, fallback_percentile), f'fallback percentil {fallback_percentile}')
+
+    return sorted(candidate_map.values(), key=lambda item: item['eps'])
+
+
+def _evaluate_dbscan_candidate(X, min_samples, candidate):
+    X_matrix = _as_numpy_matrix(X)
+    eps = float(candidate['eps'])
+    model = SklearnDBSCAN(eps=eps, min_samples=min_samples)
+    labels = model.fit_predict(X_matrix)
+
+    cluster_labels = sorted(int(label) for label in np.unique(labels) if label != -1)
+    cluster_count = len(cluster_labels)
+    noise_count = int(np.sum(labels == -1))
+    silhouette = _safe_dbscan_silhouette_score(X_matrix, labels)
+    valid_for_selection = silhouette is not None and cluster_count >= 2 and noise_count < len(labels)
+
+    return {
+        **candidate,
+        'model': model,
+        'labels': labels,
+        'cluster_labels': cluster_labels,
+        'cluster_count': cluster_count,
+        'noise_count': noise_count,
+        'silhouette_score': silhouette,
+        'valid_for_selection': valid_for_selection,
+        'status': 'válido' if valid_for_selection else ('sin_silhouette' if cluster_count >= 1 else 'colapso_total'),
+    }
+
+
+def _select_best_dbscan_candidate(candidate_results, fallback_result):
+    valid_candidates = [candidate for candidate in candidate_results if candidate['valid_for_selection']]
+
+    if valid_candidates:
+        selected = max(
+            valid_candidates,
+            key=lambda candidate: (
+                candidate['silhouette_score'],
+                candidate['cluster_count'],
+                -candidate['noise_count'],
+                -candidate['eps'],
+            ),
+        )
+        selection_reason = 'mejor silhouette válida entre los candidatos'
+        used_fallback = False
+    else:
+        selected = fallback_result if fallback_result is not None else (candidate_results[0] if candidate_results else None)
+        selection_reason = 'fallback al eps estimado original'
+        used_fallback = True
+
+    return selected, selection_reason, used_fallback, valid_candidates
+
+
 def train_dbscan_model(X, min_samples=None):
     X_matrix = _as_numpy_matrix(X)
     if X_matrix.size == 0:
@@ -540,12 +619,16 @@ def train_dbscan_model(X, min_samples=None):
             'model': None,
             'labels': np.array([]),
             'eps': None,
+            'estimated_eps': None,
             'min_samples': None,
             'cluster_labels': [],
             'cluster_count': 0,
             'noise_count': 0,
             'silhouette_score': None,
             'k_distances': np.array([]),
+            'eps_candidates': [],
+            'selection_reason': 'sin datos',
+            'selected_from_fallback': True,
         }
 
     n_samples, feature_count = X_matrix.shape
@@ -555,25 +638,55 @@ def train_dbscan_model(X, min_samples=None):
     min_samples = min(min_samples, n_samples)
     min_samples = max(2, min_samples) if n_samples >= 2 else n_samples
 
-    eps, k_distances = _estimate_dbscan_eps(X_matrix, min_samples)
-    model = SklearnDBSCAN(eps=eps, min_samples=min_samples)
-    labels = model.fit_predict(X_matrix)
+    estimated_eps, k_distances = _estimate_dbscan_eps(X_matrix, min_samples)
+    eps_candidates = _build_dbscan_eps_candidates(estimated_eps, k_distances)
+    candidate_results = [
+        _evaluate_dbscan_candidate(X_matrix, min_samples, candidate)
+        for candidate in eps_candidates
+    ]
 
-    cluster_labels = sorted(int(label) for label in np.unique(labels) if label != -1)
-    cluster_count = len(cluster_labels)
-    noise_count = int(np.sum(labels == -1))
-    dbscan_silhouette = _safe_dbscan_silhouette_score(X_matrix, labels)
+    fallback_result = next(
+        (candidate for candidate in candidate_results if np.isclose(candidate['eps'], estimated_eps)),
+        candidate_results[0] if candidate_results else None,
+    )
+    selected_result, selection_reason, selected_from_fallback, valid_candidates = _select_best_dbscan_candidate(
+        candidate_results,
+        fallback_result,
+    )
+
+    if selected_result is None:
+        return {
+            'model': None,
+            'labels': np.array([]),
+            'eps': None,
+            'estimated_eps': estimated_eps,
+            'min_samples': min_samples,
+            'cluster_labels': [],
+            'cluster_count': 0,
+            'noise_count': 0,
+            'silhouette_score': None,
+            'k_distances': k_distances,
+            'eps_candidates': candidate_results,
+            'selection_reason': selection_reason,
+            'selected_from_fallback': selected_from_fallback,
+        }
 
     return {
-        'model': model,
-        'labels': labels,
-        'eps': eps,
+        'model': selected_result['model'],
+        'labels': selected_result['labels'],
+        'eps': selected_result['eps'],
+        'estimated_eps': estimated_eps,
         'min_samples': min_samples,
-        'cluster_labels': cluster_labels,
-        'cluster_count': cluster_count,
-        'noise_count': noise_count,
-        'silhouette_score': dbscan_silhouette,
+        'cluster_labels': selected_result['cluster_labels'],
+        'cluster_count': selected_result['cluster_count'],
+        'noise_count': selected_result['noise_count'],
+        'silhouette_score': selected_result['silhouette_score'],
         'k_distances': k_distances,
+        'eps_candidates': candidate_results,
+        'selected_candidate': selected_result,
+        'valid_candidate_count': len(valid_candidates),
+        'selection_reason': selection_reason,
+        'selected_from_fallback': selected_from_fallback,
     }
 
 
@@ -620,12 +733,15 @@ def _build_dbscan_summary_row(index, variant_result):
     return {
         'Version': index,
         'Preprocessing': variant_result['label'],
+        'DBSCAN eps estimado': round(report['estimated_eps'], 4) if report.get('estimated_eps') is not None else None,
         'DBSCAN eps': round(report['eps'], 4) if report['eps'] is not None else None,
         'DBSCAN min_samples': int(report['min_samples']) if report['min_samples'] is not None else None,
         'DBSCAN labels': unique_labels,
         'DBSCAN cluster_count': int(report['cluster_count']),
         'DBSCAN noise_count': int(report['noise_count']),
         'DBSCAN silhouette_score': round(report['silhouette_score'], 4) if report['silhouette_score'] is not None else None,
+        'DBSCAN candidatos': len(report.get('eps_candidates', [])),
+        'DBSCAN criterio': report.get('selection_reason'),
     }
 
 
@@ -945,8 +1061,9 @@ def graficar_clusters_pca_dbscan(variant_results):
                     label=f'Clúster {int(cluster_id)}',
                 )
 
+        eps_label = f"{report['eps']:.3f}" if report['eps'] is not None else 'N/D'
         ax.set_title(
-            f"V{row_index + 1} - DBSCAN (eps={report['eps']:.3f}, min_samples={report['min_samples']})",
+            f"V{row_index + 1} - DBSCAN (eps={eps_label}, min_samples={report['min_samples']})",
             fontsize=9,
         )
         if row_index == n_rows - 1:
@@ -989,9 +1106,34 @@ def mostrar_predicciones_dbscan(variant_results):
             )
 
 
+def mostrar_candidatos_dbscan(variant_results):
+    for index, variant_result in enumerate(variant_results, 1):
+        report = variant_result['dbscan_report']
+        candidates = report.get('eps_candidates', [])
+        if not candidates:
+            continue
+
+        selected_eps = report.get('eps')
+        filas = []
+        for candidate in candidates:
+            filas.append({
+                'eps': round(candidate['eps'], 4),
+                'fuentes': ', '.join(candidate.get('sources', [])),
+                'clusters': int(candidate.get('cluster_count', 0)),
+                'ruido': int(candidate.get('noise_count', 0)),
+                'silhouette': round(candidate['silhouette_score'], 4) if candidate.get('silhouette_score') is not None else None,
+                'estado': candidate.get('status'),
+                'seleccionado': 'sí' if selected_eps is not None and np.isclose(candidate['eps'], selected_eps) else '',
+            })
+
+        print(f"\nCandidatos de eps DBSCAN - Variación {index}: {variant_result['label']}")
+        print(pd.DataFrame(filas).to_string(index=False))
+
+
 def mostrar_analisis_resultados_no_supervisados(summary_df, variant_results):
     kmeans_scores = []
     dbscan_scores = []
+    dbscan_fallbacks = 0
 
     for variant_result in variant_results:
         kmeans_strategy = variant_result['report']['strategies']['silhouette']
@@ -1003,6 +1145,8 @@ def mostrar_analisis_resultados_no_supervisados(summary_df, variant_results):
         dbscan_score = variant_result['dbscan_report']['silhouette_score']
         if dbscan_score is not None:
             dbscan_scores.append((variant_result['label'], dbscan_score))
+        if variant_result['dbscan_report'].get('selected_from_fallback'):
+            dbscan_fallbacks += 1
 
     best_kmeans = max(kmeans_scores, key=lambda item: item[1]) if kmeans_scores else None
     best_dbscan = max(dbscan_scores, key=lambda item: item[1]) if dbscan_scores else None
@@ -1015,17 +1159,26 @@ def mostrar_analisis_resultados_no_supervisados(summary_df, variant_results):
         print("- Mejor KMeans silhouette: no disponible")
 
     if best_dbscan is not None:
-        print(f"- Mejor DBSCAN silhouette: {best_dbscan[0]} ({best_dbscan[1]:.4f})")
+        best_dbscan_variant = next((variant for variant in variant_results if variant['label'] == best_dbscan[0]), None)
+        if best_dbscan_variant is not None:
+            report = best_dbscan_variant['dbscan_report']
+            print(
+                f"- Mejor DBSCAN silhouette: {best_dbscan[0]} "
+                f"(eps={report['eps']:.4f}, silhouette={best_dbscan[1]:.4f})"
+            )
+        else:
+            print(f"- Mejor DBSCAN silhouette: {best_dbscan[0]} ({best_dbscan[1]:.4f})")
     else:
         print("- Mejor DBSCAN silhouette: no disponible")
 
     print(f"- DBSCAN sin silhouette válida: {invalid_dbscan}/{len(variant_results)} variantes")
+    print(f"- DBSCAN que usó fallback al eps estimado: {dbscan_fallbacks}/{len(variant_results)} variantes")
 
 
-def ejecutar_flujo_kmeans(df, variaciones):
+def ejecutar_flujo_nosupervisado(df, variaciones):
     print("\n\nFIGURA 3 - Resumen No Supervisado por variación")
     summary_df, variant_results = generar_reporte_no_supervisado(df, variaciones)
-    print(summary_df)
+    print(summary_df.to_string(index=False))
 
     graficar_clusters_pca_kmeans(variant_results)
     graficar_clusters_pca_dbscan(variant_results)
@@ -1034,6 +1187,7 @@ def ejecutar_flujo_kmeans(df, variaciones):
     graficar_elbow_comparativo_kmeans(variant_results)
     mostrar_predicciones_kmeans(variant_results)
     mostrar_predicciones_dbscan(variant_results)
+    mostrar_candidatos_dbscan(variant_results)
     mostrar_analisis_resultados_no_supervisados(summary_df, variant_results)
 
     return summary_df, variant_results
@@ -1083,4 +1237,4 @@ if __name__ == "__main__":
     graficar_funciones(knn_modelv1, modelov1, Columna_xv1, Xv1, yv1)
     
     # flujo KMeans
-    ejecutar_flujo_kmeans(df, variaciones)
+    ejecutar_flujo_nosupervisado(df, variaciones)
