@@ -1,6 +1,8 @@
+
+
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.ensemble import IsolationForest
 from imblearn.over_sampling import SMOTE
 from sklearn.model_selection import train_test_split
@@ -13,15 +15,49 @@ from sklearn.cluster import KMeans, DBSCAN as SklearnDBSCAN
 import matplotlib.pyplot as plt
 from sklearn.tree import plot_tree
 
+
+#* Función para imprimir secciones con formato en la terminal
+def printeo(x):
+    """formatea informacion para mayor legibilidad
+
+    Args:
+        x (str, object): informacion o datos a imprimir
+    """
+    print(f"\n{'__'*60}\n{x}\n{'__'*60}\n")
+
+
 # Cargar dataset
 df = pd.read_csv('wine_quality_merged.csv')
 df = df.sample(n=5150, random_state=41).reset_index(drop=True)
+# Verificar la carga del dataset
+
+printeo(f"Primeras filas del dataset: \n\n{df.head()}")
+
 
 # CC: conversion categorica a numerica
 df['type'] = df['type'].map({'red': 1, 'white': 0})
-print(df.head())
+# Verificar la conversión
 
+printeo(f"Dataset después de la conversión de categorica a numerica: \n\n{df.head()}")
+
+
+
+# Función para preparar los datos según las variaciones de escalado, outliers y balanceo
 def prepare_data(df, escalado, outliers, balanceo):
+    """hace la conversion de la tabla en base a los parametros requeridos
+
+    Args:
+        df (table): dataframe con los datos originales
+        escalado (bool): indicador de si se debe aplicar escalado
+        outliers (bool): indicador de si se deben eliminar outliers
+        balanceo (bool): indicador de si se debe balancear el dataset
+
+    Returns:
+        df_processed (table): dataframe procesado con las transformaciones aplicadas
+        X (table): matriz de características después de las transformaciones
+        y (series): vector objetivo después de las transformaciones
+    """
+    
     df_processed = df.copy()
     X = df_processed.drop('quality', axis=1)
     y = df_processed['quality']  # multiclase (3-9)
@@ -43,6 +79,9 @@ def prepare_data(df, escalado, outliers, balanceo):
 
     return df_processed, X, y
 
+
+
+
 # Generar tabla de variaciones con diferentes combinaciones de escalado, outliers y balanceo
 variaciones = [
     {'escalado': 'no', 'outliers': 'no', 'balanceo': 'no'},
@@ -55,15 +94,27 @@ variaciones = [
     {'escalado': 'si', 'outliers': 'si', 'balanceo': 'si'}
 ]
 
+
+
 # Función para generar tabla resumen de variaciones en la terminal
 def generar_tabla_variaciones(df, variaciones):
+    """ genera una tabla en la terminal con el listado de las variaciones que se le va a hacer al csv original
+
+    Args:
+        df (table): dataframe con los datos originales
+        variaciones (list): lista de diccionarios con los parámetros de cada variación
+
+    Returns:
+        filas: dataframe con el resumen de las variaciones
+    """
+    
     filas = []
     for i, params in enumerate(variaciones, 1):
         df_proc, X, y = prepare_data(df, **params)
         clases, counts = np.unique(y, return_counts=True)
         dist = dict(zip(clases, counts))
         filas.append({
-            'Version': i,
+            'Version': f'v{i}',
             'CC': 'si',
             'ED': params['escalado'],
             'Outliers': params['outliers'],
@@ -74,9 +125,11 @@ def generar_tabla_variaciones(df, variaciones):
         })
     return pd.DataFrame(filas)
 
-print("\n\n",generar_tabla_variaciones(df, variaciones))
+printeo(f"Tabla de variaciones aplicadas al dataset original:\n\n{generar_tabla_variaciones(df, variaciones)}")
 
-# Guardar cada variacion en una variable
+
+
+# Guardar cada variacion en una variable para su posterior uso en el entrenamiento de modelos y comparación de resultados
 v1 = prepare_data(df, **variaciones[0])  #caso 1(df_proc, X, y)
 v2 = prepare_data(df, **variaciones[1]) #caso 2
 v3 = prepare_data(df, **variaciones[2]) #caso 3
@@ -86,10 +139,25 @@ v6 = prepare_data(df, **variaciones[5]) #caso 6
 v7 = prepare_data(df, **variaciones[6]) #caso 7
 v8 = prepare_data(df, **variaciones[7]) #caso 8
 
-print("\n\nVERIFICAR UNA VARIACIÓN PROCESADA (ejemplo v1):")
-v1[0].head() # Mostrar el DataFrame procesado de la última variación
 
+# Verificacion de la primera variacion procesada
+printeo(f"Primeras filas del DataFrame procesado de la variación v1:\n\n{v1[0].head()}")
+
+
+
+# Función para calcular métricas de evaluación de modelos
 def metricas(y_test, y_pred):
+    """ calcula las metricas de evaluacion de los modelos
+
+    Args:
+        y_test (array-like): etiquetas reales del conjunto de prueba
+        y_pred (array-like): etiquetas predichas por el modelo
+
+    Returns:
+        metricas: diccionario con las métricas de evaluación
+    """
+    
+    
     metricas = {
         'accuracy': round(accuracy_score(y_test, y_pred), 2),
         'precision_weighted': round(precision_score(y_test, y_pred, average='weighted', zero_division=0),2),
@@ -107,8 +175,20 @@ def metricas(y_test, y_pred):
 
 
 #*aprendizaje supervisado
-
 def arboles(X,y):
+    """ entrena un modelo de árbol de decisión utilizando el criterio de Gini y evalúa su desempeño
+
+    Args: 
+        X (pd.DataFrame): dataframe con las características de entrada para el modelo
+        y (pd.Series): vector con las etiquetas de clase correspondientes a cada muestra en X
+
+    Returns:
+        metricas: diccionario con las métricas de evaluación del modelo
+        importancia_vars: dataframe con la importancia de las variables en el modelo
+        modelo_gini: modelo de árbol de decisión entrenado con el criterio de Gini
+        Columna_x: lista con los nombres de las columnas utilizadas en el modelo
+    """
+    
     #Separacion de datos
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=41)
 
@@ -147,6 +227,21 @@ def arboles(X,y):
 
 
 def entrenar_knn(X, y, test_size=0.2, random_state=41):
+    """ entrena un modelo de KNN utilizando la métrica euclidiana y evalúa su desempeño
+
+    Args:
+        X (pd.DataFrame): dataframe con las características de entrada para el modelo
+        y (pd.Series): vector con las etiquetas de clase correspondientes a cada muestra en X
+        test_size (float): proporción de datos a utilizar para testing.
+        random_state (int): semilla para la generación de números aleatorios.
+
+    Returns:
+        knn: modelo de KNN entrenado
+        metrica: diccionario con las métricas de evaluación del modelo
+        accuracy: precisión del modelo en el conjunto de prueba
+    """
+    
+    
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=random_state, stratify=y
     )
@@ -158,21 +253,23 @@ def entrenar_knn(X, y, test_size=0.2, random_state=41):
     return knn, metrica, accuracy
 
 
-
-
-
-
-
-
-
-
-
 def svm(X,y):
+    """ entrena un modelo de SVM y evalúa su desempeño
+
+    Args:
+        X (pd.DataFrame): dataframe con las características de entrada para el modelo
+        y (pd.Series): vector con las etiquetas de clase correspondientes a cada muestra en X
+
+    Returns:
+        metrica: diccionario con las métricas de evaluación del modelo
+    """
+    
+    
     #Separacion de datos
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.30, random_state=41)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.30, random_state=41, stratify=y)
     
     #Creacion del modelo
-    model = SVC(kernel='rbf', gamma="auto", C=1.0)  # C=1.0 (Equilibrado)
+    model = SVC(kernel='rbf', gamma="scale", C=1.0)  # C=1.0 (Equilibrado)
     model.fit(X_train, y_train)
 
     #Predicciones
@@ -185,16 +282,83 @@ def svm(X,y):
 
 
 
-def redes_neuronales():
-    pass
+def redes_neuronales(X, y):
+    import tensorflow as tf
+    from tensorflow.keras import models, layers,  regularizers # ← 1. Importar regularizers
+    from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau  # ← 2. Importar callbacks
 
+    encoder = LabelEncoder()
+    y = encoder.fit_transform(y)
 
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.30, random_state=41, stratify=y)
 
+    # 3. Arquitectura con L2 y Dropout
+    model = models.Sequential([
+        layers.Dense(
+            64, activation='relu',
+            input_shape=(X_train.shape[1],),
+            kernel_regularizer=regularizers.l2(0.001)  # ← penaliza pesos grandes
+        ),
+        layers.Dropout(0.2),   # ← apaga 20% neuronas al azar en cada epoch (evita overfitting)
 
-def grafico_comparacion(arbolv1, knnv1, svmv1, arbolv2, knnv2, svmv2, arbolv3, knnv3, svmv3, arbolv4, knnv4, svmv4, 
-                        arbolv5, knnv5, svmv5, arbolv6, knnv6, svmv6, arbolv7, knnv7, svmv7, arbolv8, knnv8, svmv8):    
+        layers.Dense(
+            32, activation='relu',
+            kernel_regularizer=regularizers.l2(0.001)
+        ),
+        layers.Dropout(0.2),   # ← segundo Dropout
+
+        layers.Dense(7, activation='softmax')  # 7 clases de calidad (3 a 9)
+    ])
+
+    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+
+    # 4. Definir los callbacks
+    early_stop = EarlyStopping(
+        monitor='val_loss',   # observa la pérdida en validación
+        patience=15,          # espera 15 epochs sin mejora antes de parar
+        restore_best_weights=True  # recupera los mejores pesos encontrados
+    )
+    reduce_lr = ReduceLROnPlateau(
+        monitor='val_loss',   # observa la pérdida en validación
+        patience=5,           # espera 5 epochs sin mejora
+        factor=0.5,           # reduce el learning rate a la mitad
+        min_lr=1e-6           # límite mínimo del learning rate
+    )
+
+    #  5. Entrenar con los callbacks
+    model.fit(
+        X_train, y_train,
+        epochs=100,            # ← ahora puede entrenarse hasta 100 epochs
+        batch_size=32,
+        validation_split=0.1,
+        callbacks=[early_stop, reduce_lr],  # ← aquí se pasan los callbacks
+        verbose=0
+    )
+
+    predicciones = model.predict(X_test, verbose=0)
+    y_pred = np.argmax(predicciones, axis=1)
+    metrica = metricas(y_test, y_pred)
+    return metrica
+
+#---
+
+def grafico_comparacion_supervisada(arbolv1, knnv1, svmv1, red_neuronalv1, arbolv2, knnv2, svmv2, red_neuronalv2, arbolv3, knnv3, svmv3, red_neuronalv3, arbolv4, knnv4, svmv4, red_neuronalv4, 
+                        arbolv5, knnv5, svmv5, red_neuronalv5, arbolv6, knnv6, svmv6, red_neuronalv6, arbolv7, knnv7, svmv7, red_neuronalv7, arbolv8, knnv8, svmv8, red_neuronalv8):
+    
+    """ genera una tabla comparativa en la terminal con las metricas de los 4 modelos (arbol, knn, svm, red_neuronal) para cada una de las 8 variaciones
+
+    Args:
+        arbolv1 a arbolv8 (list): lista con accuracy, precision_weighted, recall_weighted y f1_weighted para arbol en cada variacion
+        knnv1 a knnv8 (list): lista con accuracy, precision_weighted, recall_weighted y f1_weighted para knn en cada variacion
+        svmv1 a svmv8 (list): lista con accuracy, precision_weighted, recall_weighted y f1_weighted para svm en cada variacion
+        red_neuronalv1 a red_neuronalv8 (list): lista con accuracy, precision_weighted, recall_weighted y f1_weighted para red_neuronal en cada variacion
+
+    Returns:
+        df: dataframe con la tabla comparativa de metricas organizada con MultiIndex
+    """
+        
     # Definir los algoritmos y métricas
-    algoritmos = ['ÁRBOLES DE DECISIÓN', 'K VECINOS MAS CERCANOS (KNN)', 'MAQUINAS DE VECTORES DE SOPORTE (SVM)' ]
+    algoritmos = ['ÁRBOLES DE DECISIÓN', 'K VECINOS MAS CERCANOS (KNN)', 'MAQUINAS DE VECTORES DE SOPORTE (SVM)', 'REDES NEURONALES' ]
     metricas = ['ACCURACY', 'PRECISION', 'RECALL', 'F1-SCORE']
 
     # Crear MultiIndex para las columnas
@@ -206,47 +370,399 @@ def grafico_comparacion(arbolv1, knnv1, svmv1, arbolv2, knnv2, svmv2, arbolv3, k
     # Datos de las filas
     datos = [
         [1, 'CC(SI) y ED(NO)', 'NO', 'NO', arbolv1[0], arbolv1[1], arbolv1[2], arbolv1[3],
-         knnv1[0], knnv1[1], knnv1[2], knnv1[3], svmv1[0], svmv1[1], svmv1[2], svmv1[3]],
+        knnv1[0], knnv1[1], knnv1[2], knnv1[3], svmv1[0], svmv1[1], svmv1[2], svmv1[3], red_neuronalv1[0], red_neuronalv1[1], red_neuronalv1[2], red_neuronalv1[3]],
         
         [2, 'CC(SI) y ED(NO)', 'NO', 'SI', arbolv2[0], arbolv2[1], arbolv2[2], arbolv2[3], 
-         knnv2[0], knnv2[1], knnv2[2], knnv2[3], svmv2[0], svmv2[1], svmv2[2], svmv2[3]],
+        knnv2[0], knnv2[1], knnv2[2], knnv2[3], svmv2[0], svmv2[1], svmv2[2], svmv2[3], red_neuronalv2[0], red_neuronalv2[1], red_neuronalv2[2], red_neuronalv2[3]],
         
         [3, 'CC(SI) y ED(NO)', 'SI', 'NO', arbolv3[0], arbolv3[1], arbolv3[2], arbolv3[3], 
-         knnv3[0], knnv3[1], knnv3[2], knnv3[3],svmv3[0], svmv3[1], svmv3[2], svmv3[3]],
+        knnv3[0], knnv3[1], knnv3[2], knnv3[3],svmv3[0], svmv3[1], svmv3[2], svmv3[3], red_neuronalv3[0], red_neuronalv3[1], red_neuronalv3[2], red_neuronalv3[3]],
         
         [4, 'CC(SI) y ED(NO)', 'SI', 'SI', arbolv4[0], arbolv4[1], arbolv4[2], arbolv4[3], 
-         knnv4[0], knnv4[1], knnv4[2], knnv4[3], svmv4[0], svmv4[1], svmv4[2], svmv4[3]],
+        knnv4[0], knnv4[1], knnv4[2], knnv4[3], svmv4[0], svmv4[1], svmv4[2], svmv4[3], red_neuronalv4[0], red_neuronalv4[1], red_neuronalv4[2], red_neuronalv4[3]],
         
         [5, 'CC(SI) y ED(SI)', 'NO', 'NO', arbolv5[0], arbolv5[1], arbolv5[2], arbolv5[3], 
-         knnv5[0], knnv5[1], knnv5[2], knnv5[3], svmv5[0], svmv5[1], svmv5[2], svmv5[3]],
+        knnv5[0], knnv5[1], knnv5[2], knnv5[3], svmv5[0], svmv5[1], svmv5[2], svmv5[3], red_neuronalv5[0], red_neuronalv5[1], red_neuronalv5[2], red_neuronalv5[3]],
         
         [6, 'CC(SI) y ED(SI)', 'NO', 'SI', arbolv6[0], arbolv6[1], arbolv6[2], arbolv6[3], 
-         knnv6[0], knnv6[1], knnv6[2], knnv6[3], svmv6[0], svmv6[1], svmv6[2], svmv6[3]],
+        knnv6[0], knnv6[1], knnv6[2], knnv6[3], svmv6[0], svmv6[1], svmv6[2], svmv6[3], red_neuronalv6[0], red_neuronalv6[1], red_neuronalv6[2], red_neuronalv6[3]],
         
         [7, 'CC(SI) y ED(SI)', 'SI', 'NO', arbolv7[0], arbolv7[1], arbolv7[2], arbolv7[3], 
-         knnv7[0], knnv7[1], knnv7[2], knnv7[3], svmv7[0], svmv7[1], svmv7[2], svmv7[3]],
+        knnv7[0], knnv7[1], knnv7[2], knnv7[3], svmv7[0], svmv7[1], svmv7[2], svmv7[3], red_neuronalv7[0], red_neuronalv7[1], red_neuronalv7[2], red_neuronalv7[3]],
         
         [8, 'CC(SI) y ED(SI)', 'SI', 'SI', arbolv8[0], arbolv8[1], arbolv8[2], arbolv8[3], 
-         knnv8[0], knnv8[1], knnv8[2], knnv8[3], svmv8[0], svmv8[1], svmv8[2], svmv8[3]],
+        knnv8[0], knnv8[1], knnv8[2], knnv8[3], svmv8[0], svmv8[1], svmv8[2], svmv8[3], red_neuronalv8[0], red_neuronalv8[1], red_neuronalv8[2], red_neuronalv8[3]],
     ]
 
     df = pd.DataFrame(datos, columns=multi_index)
-    print(df)
     
     return df
 
 
-def variacion_no_supervisada(variacion):
+def graficar_tabla_comparacion(tabla):
+    """Muestra una tabla comparativa de métricas de modelos en una figura de Matplotlib.
+
+    Args:
+        tabla (pd.DataFrame): dataframe con métricas organizadas en MultiIndex.
+
+    Returns:
+        None: renderiza la tabla en un gráfico de Matplotlib.
+    """
+    fig, ax = plt.subplots(figsize=(20, 6))
+    ax.axis('off')
+    ax.axis('tight')
+    ax.table(cellText=tabla.values,
+            colLabels=tabla.columns.get_level_values(1) if isinstance(tabla.columns, pd.MultiIndex) else tabla.columns,
+            rowLabels=tabla.index,
+            cellLoc='center',
+            loc='center')
+    plt.title("Comparación de modelos por variación", fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    plt.show()
+
+def graficar_f1_maximo_supervisado(arboles, knns, svms, redes):
+    """Genera un gráfico de barras con el F1 máximo por tipo de modelo.
+
+    Args:
+        arboles (list[list[float]]): métricas de las variaciones del modelo de árbol.
+        knns (list[list[float]]): métricas de las variaciones del modelo KNN.
+        svms (list[list[float]]): métricas de las variaciones del modelo SVM.
+        redes (list[list[float]]): métricas de las variaciones del modelo de redes neuronales.
+
+    Returns:
+        None: muestra el gráfico de barras con los valores máximos de F1 para cada algoritmo.
+    """
+    algoritmos = ['ÁRBOLES\nDE DECISIÓN', 'KNN', 'SVM', 'REDES\nNEURONALES']
+    f1_maximos = [
+        max(a[3] for a in arboles),
+        max(k[3] for k in knns),
+        max(s[3] for s in svms),
+        max(r[3] for r in redes),
+    ]
+
+    colores = ['#2E7D32', '#1565C0', '#E65100', '#6A1B9A']
+
+    plt.figure(figsize=(8, 5))
+    bars = plt.bar(algoritmos, f1_maximos, color=colores, edgecolor='black', linewidth=1.2)
+
+    for bar, valor in zip(bars, f1_maximos):
+        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                f'{valor:.2f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
+
+    plt.ylim(0, 1.1)
+    plt.ylabel('F1-Score Máximo', fontsize=12)
+    plt.title('F1-Score máximo por algoritmo (supervisado)', fontsize=14, fontweight='bold')
+    plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+def graficar_f1_medio_por_normalizacion(arboles, knns, svms, redes):
+    """Grafica el F1 medio por algoritmo comparando datos con y sin normalización.
+
+    Args:
+        arboles (list[list[float]]): métricas de árbol de decisión para cada variación.
+        knns (list[list[float]]): métricas de KNN para cada variación.
+        svms (list[list[float]]): métricas de SVM para cada variación.
+        redes (list[list[float]]): métricas de redes neuronales para cada variación.
+
+    Returns:
+        None: muestra un gráfico de barras de F1 medio para ED=NO y ED=SI.
+    """
+    import numpy as np
+
+    def media_f1(modelos):
+        """Calcula el F1 medio de una lista de métricas de modelo.
+
+        Args:
+            modelos (list[list[float]]): lista de métricas de modelo, donde el índice 3 es F1.
+
+        Returns:
+            float: valor medio de F1 para los modelos proporcionados.
+        """
+        return np.mean([m[3] for m in modelos])
+
+    f1_ed_no = [
+        media_f1(arboles[:4]),
+        media_f1(knns[:4]),
+        media_f1(svms[:4]),
+        media_f1(redes[:4]),
+    ]
+    f1_ed_si = [
+        media_f1(arboles[4:]),
+        media_f1(knns[4:]),
+        media_f1(svms[4:]),
+        media_f1(redes[4:]),
+    ]
+
+    categorias = ['ÁRBOLES', 'KNN', 'SVM', 'REDES\nNEURONALES']
+    x = np.arange(len(categorias))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bars1 = ax.bar(x - width/2, f1_ed_no, width, label='ED=NO', color='#42A5F5', edgecolor='black')
+    bars2 = ax.bar(x + width/2, f1_ed_si, width, label='ED=SI', color='#EF5350', edgecolor='black')
+
+    for bars in [bars1, bars2]:
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, height + 0.01,
+                    f'{height:.2f}', ha='center', va='bottom', fontsize=9)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(categorias, fontsize=11)
+    ax.set_ylabel('F1-Score medio', fontsize=12)
+    ax.set_title('F1-Score medio por normalización y algoritmo', fontsize=14, fontweight='bold')
+    ax.legend(fontsize=11)
+    ax.set_ylim(0, 1.1)
+    ax.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+def graficar_f1_medio_por_outliers(arboles, knns, svms, redes):
+    """Grafica el F1 medio por algoritmo comparando datos con y sin outliers.
+
+    Args:
+        arboles (list[list[float]]): métricas de árbol de decisión para cada variación.
+        knns (list[list[float]]): métricas de KNN para cada variación.
+        svms (list[list[float]]): métricas de SVM para cada variación.
+        redes (list[list[float]]): métricas de redes neuronales para cada variación.
+
+    Returns:
+        None: muestra un gráfico de barras de F1 medio para outliers=NO y outliers=SI.
+    """
+    import numpy as np
+
+    def media_f1(modelos):
+        """Calcula el F1 medio de una lista de métricas de modelo.
+
+        Args:
+            modelos (list[list[float]]): lista de métricas de modelo, donde el índice 3 es F1.
+
+        Returns:
+            float: valor medio de F1 para los modelos proporcionados.
+        """
+        return np.mean([m[3] for m in modelos])
+
+    f1_out_no = [
+        media_f1([arboles[i] for i in [0,1,4,5]]),
+        media_f1([knns[i] for i in [0,1,4,5]]),
+        media_f1([svms[i] for i in [0,1,4,5]]),
+        media_f1([redes[i] for i in [0,1,4,5]]),
+    ]
+    f1_out_si = [
+        media_f1([arboles[i] for i in [2,3,6,7]]),
+        media_f1([knns[i] for i in [2,3,6,7]]),
+        media_f1([svms[i] for i in [2,3,6,7]]),
+        media_f1([redes[i] for i in [2,3,6,7]]),
+    ]
+
+    categorias = ['ÁRBOLES', 'KNN', 'SVM', 'REDES\nNEURONALES']
+    x = np.arange(len(categorias))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bars1 = ax.bar(x - width/2, f1_out_no, width, label='Outliers=NO', color='#66BB6A', edgecolor='black')
+    bars2 = ax.bar(x + width/2, f1_out_si, width, label='Outliers=SI', color='#FFA726', edgecolor='black')
+
+    for bars in [bars1, bars2]:
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, height + 0.01,
+                    f'{height:.2f}', ha='center', va='bottom', fontsize=9)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(categorias, fontsize=11)
+    ax.set_ylabel('F1-Score medio', fontsize=12)
+    ax.set_title('F1-Score medio por manejo de outliers y algoritmo', fontsize=14, fontweight='bold')
+    ax.legend(fontsize=11)
+    ax.set_ylim(0, 1.1)
+    ax.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+def graficar_f1_medio_por_balanceo(arboles, knns, svms, redes):
+    """Grafica el F1 medio por algoritmo comparando datos con y sin balanceo.
+
+    Args:
+        arboles (list[list[float]]): métricas de árbol de decisión para cada variación.
+        knns (list[list[float]]): métricas de KNN para cada variación.
+        svms (list[list[float]]): métricas de SVM para cada variación.
+        redes (list[list[float]]): métricas de redes neuronales para cada variación.
+
+    Returns:
+        None: muestra un gráfico de barras de F1 medio para balanceo=NO y balanceo=SI.
+    """
+    import numpy as np
+
+    def media_f1(modelos):
+        """Calcula el F1 medio de una lista de métricas de modelo.
+
+        Args:
+            modelos (list[list[float]]): lista de métricas de modelo, donde el índice 3 es F1.
+
+        Returns:
+            float: valor medio de F1 para los modelos proporcionados.
+        """
+        return np.mean([m[3] for m in modelos])
+
+    f1_bal_no = [
+        media_f1([arboles[i] for i in [0,2,4,6]]),
+        media_f1([knns[i] for i in [0,2,4,6]]),
+        media_f1([svms[i] for i in [0,2,4,6]]),
+        media_f1([redes[i] for i in [0,2,4,6]]),
+    ]
+    f1_bal_si = [
+        media_f1([arboles[i] for i in [1,3,5,7]]),
+        media_f1([knns[i] for i in [1,3,5,7]]),
+        media_f1([svms[i] for i in [1,3,5,7]]),
+        media_f1([redes[i] for i in [1,3,5,7]]),
+    ]
+
+    categorias = ['ÁRBOLES', 'KNN', 'SVM', 'REDES\nNEURONALES']
+    x = np.arange(len(categorias))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bars1 = ax.bar(x - width/2, f1_bal_no, width, label='Balanceo=NO', color='#AB47BC', edgecolor='black')
+    bars2 = ax.bar(x + width/2, f1_bal_si, width, label='Balanceo=SI', color='#26C6DA', edgecolor='black')
+
+    for bars in [bars1, bars2]:
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, height + 0.01,
+                    f'{height:.2f}', ha='center', va='bottom', fontsize=9)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(categorias, fontsize=11)
+    ax.set_ylabel('F1-Score medio', fontsize=12)
+    ax.set_title('F1-Score medio por balanceo y algoritmo', fontsize=14, fontweight='bold')
+    ax.legend(fontsize=11)
+    ax.set_ylim(0, 1.1)
+    ax.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+def graficar_roc_pr_v8(X, y):
+    """Genera curvas ROC y Precision-Recall para cuatro modelos sobre una variación.
+
+    Args:
+        X (pd.DataFrame or np.ndarray): características de entrada.
+        y (pd.Series or np.ndarray): etiquetas de clase.
+
+    Returns:
+        None: muestra las curvas ROC y PR para los modelos evaluados.
+    """
+    from sklearn.preprocessing import label_binarize
+    from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score
+    from sklearn.multiclass import OneVsRestClassifier
+    from sklearn.svm import SVC
+    import tensorflow as tf
+    from tensorflow.keras import models, layers
+    from sklearn.preprocessing import LabelEncoder
+
+    encoder = LabelEncoder()
+    y_enc = encoder.fit_transform(y)
+    classes = np.unique(y_enc)
+    n_classes = len(classes)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y_enc, test_size=0.30, random_state=41, stratify=y_enc)
+    y_test_bin = label_binarize(y_test, classes=classes)
+
+    modelos = {}
+
+    # Árbol
+    from sklearn.tree import DecisionTreeClassifier
+    arbol = DecisionTreeClassifier(criterion='gini', max_depth=2, random_state=41)
+    arbol.fit(X_train, y_train)
+    modelos['ÁRBOL'] = arbol.predict_proba(X_test)
+
+    # KNN
+    from sklearn.neighbors import KNeighborsClassifier
+    knn = KNeighborsClassifier(n_neighbors=3, metric='euclidean')
+    knn.fit(X_train, y_train)
+    modelos['KNN'] = knn.predict_proba(X_test)
+
+    # SVM (con probability=True)
+    svm = SVC(kernel='rbf', gamma="scale", C=1.0, probability=True, random_state=41)
+    svm.fit(X_train, y_train)
+    modelos['SVM'] = svm.predict_proba(X_test)
+
+    # Red Neuronal
+    red = models.Sequential([
+        layers.Dense(32, activation='relu', input_shape=(X_train.shape[1],)),
+        layers.Dense(16, activation='relu'),
+        layers.Dense(n_classes, activation='softmax')
+    ])
+    red.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    red.fit(X_train, y_train, epochs=10, batch_size=32, validation_split=0.1, verbose=0)
+    modelos['RED\nNEURONAL'] = red.predict(X_test, verbose=0)
+
+    colores = {'ÁRBOL': '#2E7D32', 'KNN': '#1565C0', 'SVM': '#E65100', 'RED\nNEURONAL': '#6A1B9A'}
+
+    # ROC
+    plt.figure(figsize=(8, 7))
+    for nombre, prob in modelos.items():
+        fpr, tpr, _ = roc_curve(y_test_bin.ravel(), prob.ravel())
+        roc_auc = auc(fpr, tpr)
+        plt.plot(fpr, tpr, color=colores[nombre], lw=2, label=f'{nombre} (AUC = {roc_auc:.2f})')
+    plt.plot([0, 1], [0, 1], 'k--', lw=1)
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('Tasa de Falsos Positivos', fontsize=12)
+    plt.ylabel('Tasa de Verdaderos Positivos', fontsize=12)
+    plt.title('Curvas ROC - Variación 8', fontsize=14, fontweight='bold')
+    plt.legend(loc='lower right', fontsize=10)
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    # PR
+    plt.figure(figsize=(8, 7))
+    for nombre, prob in modelos.items():
+        precision, recall, _ = precision_recall_curve(y_test_bin.ravel(), prob.ravel())
+        ap = average_precision_score(y_test_bin, prob, average='micro')
+        plt.plot(recall, precision, color=colores[nombre], lw=2, label=f'{nombre} (AP = {ap:.2f})')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('Recall', fontsize=12)
+    plt.ylabel('Precision', fontsize=12)
+    plt.title('Curvas Precision-Recall - Variación 8', fontsize=14, fontweight='bold')
+    plt.legend(loc='lower left', fontsize=10)
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
+
+
+# calcular metricas de cada modelo para cada variacion y generar la tabla comparativa
+def variacion_supervisada(variacion):
+    """ ejecuta los 3 modelos supervisados (arbol, knn, svm) sobre una variacion y retorna sus metricas y objetos entrenados
+
+    Args:
+        variacion (tuple): tupla de 3 elementos (df_procesado, X, y) generada por prepare_data
+
+    Returns:
+        arbol (list): metricas del arbol [accuracy, precision_weighted, recall_weighted, f1_weighted]
+        knn (list): metricas del knn [accuracy, precision_weighted, recall_weighted, f1_weighted]
+        svm_metrics (list): metricas del svm [accuracy, precision_weighted, recall_weighted, f1_weighted]
+        modelo: modelo de arbol de decision entrenado
+        Columna_x: nombres de las columnas usadas en el modelo
+        X: dataframe de caracteristicas
+        y: serie de etiquetas
+        knn_model: modelo knn entrenado
+    """
     _, X, y = variacion
     
     
-    #arboles
+    
+    #arboles 
     metrica_arbol, importancia_vars, modelo, Columna_x = arboles(X,y)
     print(f"Arboles metricas: {metrica_arbol}\n")
     print(f"Importancia de variables:\n{importancia_vars}\n")
     #guardar metricas en una variable para la tabla comparativa
     arbol = [metrica_arbol['accuracy'],metrica_arbol["precision_weighted"], 
-               metrica_arbol['recall_weighted'], metrica_arbol['f1_weighted']]
+                metrica_arbol['recall_weighted'], metrica_arbol['f1_weighted']]
     
     
     #knn
@@ -254,24 +770,91 @@ def variacion_no_supervisada(variacion):
     print(f"KNN Accuracy: {accuracy:.4f}\n")
     #guardar metricas en una variable para la tabla comparativa
     knn = [metrica_knn['accuracy'],metrica_knn["precision_weighted"], 
-             metrica_knn['recall_weighted'], metrica_knn['f1_weighted']]
+            metrica_knn['recall_weighted'], metrica_knn['f1_weighted']]
     
     #SVM
     print("calculando metricas SVM...")
     metrica_svm = svm(X,y)
+    #TODO metrica_svm, svm_model, X_test_svm, y_test_svm = svm(X,y)
+
     print(f"Metricas svm: {metrica_svm}\n")
     svm_metrics = [metrica_svm['accuracy'],metrica_svm["precision_weighted"], 
-             metrica_svm['recall_weighted'], metrica_svm['f1_weighted']]
+            metrica_svm['recall_weighted'], metrica_svm['f1_weighted']]
     
-    return arbol, knn, svm_metrics, modelo, Columna_x, X, y, knn_model
+    
+    #redes neuronales
+    print("calculando Red neuronal...")
+    metrica_red_neuronal = redes_neuronales(X,y)
+    print(f"Metricas redes neuronales: {metrica_red_neuronal}\n")
+    red_neuronal_metrics = [metrica_red_neuronal['accuracy'],metrica_red_neuronal["precision_weighted"], 
+            metrica_red_neuronal['recall_weighted'], metrica_red_neuronal['f1_weighted']]
+    
+    
+    return arbol, knn, svm_metrics, modelo, Columna_x, X, y, knn_model, red_neuronal_metrics
+
+
+
+
+# calcular metricas de cada modelo para cada variacion y generar la tabla comparativa
+def variacion_no_supervisada(variacion):
+    """ ejecuta KMeans y DBSCAN sobre una variacion y retorna sus resultados
+
+    Args:
+        variacion (tuple): tupla de 3 elementos (df_procesado, X, y) generada por prepare_data
+
+    Returns:
+        kmeans_report (dict): reporte completo de train_kmeans_models
+        kmeans_elbow: modelo KMeans entrenado con k optimo por el codo
+        kmeans_silhouette: modelo KMeans entrenado con k optimo por la silueta
+        elbow_k (int): k optimo segun el codo
+        silhouette_k (int): k optimo segun la silueta
+        dbscan_report (dict): reporte completo de train_dbscan_model
+        dbscan_model: modelo DBSCAN entrenado
+        dbscan_eps (float): valor de eps utilizado
+        dbscan_labels: etiquetas de cluster asignadas por DBSCAN
+    """
+    _, X, _ = variacion
+
+    
+    #KMeans
+    print("calculando KMeans...")
+    kmeans_report = train_kmeans_models(X)
+    elbow_k = kmeans_report['selected_k_elbow']
+    silhouette_k = kmeans_report['selected_k_silhouette']
+    kmeans_elbow = kmeans_report['strategies']['elbow']['model']
+    kmeans_silhouette = kmeans_report['strategies']['silhouette']['model']
+    print(f"K optimo (elbow): {elbow_k}")
+    print(f"K optimo (silueta): {silhouette_k}")
+
+    #DBSCAN
+    print("calculando DBSCAN...")
+    dbscan_report = train_dbscan_model(X)
+    dbscan_model = dbscan_report['model']
+    dbscan_eps = dbscan_report['eps']
+    dbscan_labels = dbscan_report['labels']
+    print(f"DBSCAN - eps: {dbscan_eps}, clusters: {dbscan_report['cluster_count']}, ruido: {dbscan_report['noise_count']}")
+
+    
+    
+    return (kmeans_report, kmeans_elbow, kmeans_silhouette, elbow_k, silhouette_k,
+            dbscan_report, dbscan_model, dbscan_eps, dbscan_labels)
 
 
 
 from sklearn.decomposition import PCA
-import matplotlib.pyplot as plt
 
 def graficar_arbol(modelo, feature_names):
-    #feature_names = X_train.columns
+        """ 
+        genera una visualizacion grafica del arbol de decision entrenado
+
+        Args:
+            modelo: modelo de arbol de decision entrenado (DecisionTreeClassifier)
+            feature_names: nombres de las columnas de caracteristicas utilizadas
+
+        Returns:
+            None: muestra la grafica con plt.show()
+        """
+        #feature_names = X_train.columns
 
         plt.figure(figsize=(15, 10))  # Tamaño ajustado
         plot_tree(
@@ -288,6 +871,18 @@ def graficar_arbol(modelo, feature_names):
 
 
 def graficar_knn(X, y, knn, titulo="KNN - Clasificacion"):
+    """ genera una visualizacion de la clasificacion KNN usando PCA para reducir a 2 dimensiones
+
+    Args:
+        X: dataframe de caracteristicas de entrada
+        y: serie con las etiquetas de clase reales
+        knn: modelo KNN entrenado (KNeighborsClassifier)
+        titulo (str): titulo opcional para la grafica (default "KNN - Clasificacion")
+
+    Returns:
+        None: muestra la grafica con plt.show()
+    """
+
     pca = PCA(n_components=2)
     X_pca = pca.fit_transform(X)
     y_pred = knn.predict(X)
@@ -308,11 +903,97 @@ def graficar_knn(X, y, knn, titulo="KNN - Clasificacion"):
     plt.tight_layout()
     plt.show()
 
+def graficar_svm(X, y, class_labels):
+    """Visualiza la frontera de decisión de un SVM sobre los datos reducidos por PCA.
+
+    Args:
+        X (pd.DataFrame or np.ndarray): características de entrada.
+        y (pd.Series or np.ndarray): etiquetas reales de clases.
+        class_labels (list|np.ndarray): etiquetas únicas de clase para la leyenda.
+
+    Returns:
+        None: muestra un gráfico de contornos con las regiones de clasificación.
+    """
+    # Reducir a 2 dimensiones
+    pca = PCA(n_components=2)
+    X_pca = pca.fit_transform(X)
+
+    # Modelo SVM para visualización
+    model_vis = SVC(kernel='rbf', gamma='scale', C=1.0)
+    model_vis.fit(X_pca, y)
+
+    # Crear malla
+    h = 0.02
+
+    x_min, x_max = X_pca[:, 0].min() - 1, X_pca[:, 0].max() + 1
+    y_min, y_max = X_pca[:, 1].min() - 1, X_pca[:, 1].max() + 1
+
+    """xx, yy = np.meshgrid(
+        np.arange(x_min, x_max, h), # h=0.02 → puede crear millones de puntos
+        np.arange(y_min, y_max, h)
+    )"""
+    
+    xx, yy = np.meshgrid(
+    np.linspace(x_min, x_max, 200),  # siempre 200 puntos
+    np.linspace(y_min, y_max, 200)   # siempre 200 puntos → 40,000 total (rápido)
+    )
 
 
-def graficar_funciones(knn,modelo, Columna_x, X, y):
+    # Predicción sobre la malla
+    Z = model_vis.predict(
+        np.c_[xx.ravel(), yy.ravel()]
+    )
+
+    Z = Z.reshape(xx.shape)
+
+    # Gráfico
+    plt.figure(figsize=(10,8))
+
+    plt.contourf(
+        xx,
+        yy,
+        Z,
+        alpha=0.3,
+        cmap=plt.cm.RdYlBu
+    )
+
+    scatter = plt.scatter(
+        X_pca[:,0],
+        X_pca[:,1],
+        c=y,
+        cmap=plt.cm.RdYlBu,
+        edgecolor='black'
+    )
+
+    plt.xlabel('Componente Principal 1')
+    plt.ylabel('Componente Principal 2')
+    plt.title('Fronteras de decisión SVM (PCA)')
+
+    plt.legend(
+        handles=scatter.legend_elements()[0],
+        labels=[str(c) for c in class_labels],
+        title="Quality"
+    )
+
+    plt.show()
+    
+# funcion para graficar el arbol de decision y la clasificacion knn de una variacion dada
+def graficar_funciones_supervisadas(knn,modelo, Columna_x, X, y):
+    """ grafica el arbol de decision y la clasificacion KNN de una variacion
+
+    Args:
+        knn: modelo KNN entrenado (KNeighborsClassifier)
+        modelo: modelo de arbol de decision entrenado (DecisionTreeClassifier)
+        Columna_x: nombres de las columnas de caracteristicas utilizadas
+        X: dataframe de caracteristicas de entrada
+        y: serie con las etiquetas de clase reales
+
+    Returns:
+        None: muestra las graficas con plt.show()
+    """
     graficar_arbol(modelo, Columna_x)
     graficar_knn(X, y, knn)
+    graficar_svm(X, y, np.unique(y))
 
 
 
@@ -320,9 +1001,8 @@ def graficar_funciones(knn,modelo, Columna_x, X, y):
 
 
 
-#No supervisado
+#* aprendizaje no supervisado
 
-from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score  
 try:
     from kneed import KneeLocator
@@ -330,46 +1010,18 @@ except ImportError:
     KneeLocator = None
 
 
-def prepare_unsupervised_data(df, escalado, outliers, balanceo):
-    """Prepare the feature matrix for unsupervised models without using quality as input."""
-    df_processed = df.copy()
-    X = df_processed.drop('quality', axis=1)
-    y = df_processed['quality']
-    source_indices = np.asarray(X.index)
-
-    if outliers == 'no':
-        iso_forest = IsolationForest(contamination=0.05, random_state=41)
-        outlier_mask = iso_forest.fit_predict(X) == 1
-        X = X[outlier_mask].copy()
-        y = y[outlier_mask].copy()
-        source_indices = source_indices[outlier_mask]
-
-    scaler = None
-    if escalado == 'si':
-        scaler = StandardScaler()
-        X = pd.DataFrame(scaler.fit_transform(X), columns=X.columns, index=X.index)
-
-    if balanceo == 'si':
-        smote = SMOTE(random_state=41, k_neighbors=4)
-        X_resampled, y_resampled = smote.fit_resample(X, y)
-        X = pd.DataFrame(X_resampled, columns=X.columns)
-        synthetic_count = len(X) - len(source_indices)
-        if synthetic_count > 0:
-            source_indices = np.concatenate([
-                source_indices,
-                np.full(synthetic_count, -1, dtype=int),
-            ])
-        y = y_resampled
-
-    return {
-        'X': X,
-        'y': y,
-        'scaler': scaler,
-        'feature_columns': list(X.columns),
-        'source_indices': source_indices,
-    }
-
+# funcion para calcular la inercia de KMeans para diferentes valores de k 
 def _compute_kmeans_inertia(X, k_values, random_state=41):
+    """ calcula la inercia de KMeans para diferentes valores de k
+
+    Args:
+        X: dataframe o array con las caracteristicas de entrada
+        k_values (list): lista de valores de k a evaluar
+        random_state (int): semilla para reproducibilidad (default 41)
+
+    Returns:
+        inertia (list): lista con los valores de inercia para cada k
+    """
     inertia = []
     for k in k_values:
         kmeans = KMeans(n_clusters=k, random_state=random_state, n_init=10)
@@ -377,8 +1029,18 @@ def _compute_kmeans_inertia(X, k_values, random_state=41):
         inertia.append(kmeans.inertia_)
     return inertia
 
-
+# funcion para seleccionar el valor optimo de k usando el metodo del codo (elbow) 
 def _select_k_by_elbow(k_values, inertia, fallback_k):
+    """ selecciona el valor optimo de k usando el metodo del codo (elbow) con KneeLocator
+
+    Args:
+        k_values (list): lista de valores de k evaluados
+        inertia (list): lista de valores de inercia correspondientes a cada k
+        fallback_k (int): valor de k por defecto si no se detecta un codo claro
+
+    Returns:
+        int: valor optimo de k detectado, o fallback_k si no se encuentra
+    """
     if KneeLocator is None or len(k_values) < 2:
         return fallback_k
 
@@ -386,7 +1048,20 @@ def _select_k_by_elbow(k_values, inertia, fallback_k):
     return locator.elbow if locator.elbow is not None else fallback_k
 
 
+# funcion para calcular el puntaje de la silueta para diferentes valores de k y seleccionar el optimo
 def _compute_silhouette_scores(X, k_values, random_state=41):
+    """ calcula el puntaje de silueta para diferentes valores de k y selecciona el optimo
+
+    Args:
+        X: dataframe o array con las caracteristicas de entrada
+        k_values (list): lista de valores de k a evaluar
+        random_state (int): semilla para reproducibilidad (default 41)
+
+    Returns:
+        selected_k (int): valor de k con mayor puntaje de silueta
+        best_score (float): puntaje de silueta del k seleccionado
+        silhouette_scores (list): lista con todos los puntajes de silueta calculados
+    """
     silhouette_scores = []
 
     for k in k_values:
@@ -405,7 +1080,21 @@ def _compute_silhouette_scores(X, k_values, random_state=41):
     return silhouette_scores, selected_k, selected_score
 
 
+# funcion para entrenar modelos KMeans usando los metodos del codo y silueta 
 def train_kmeans_models(X, random_state=41, k_range=range(1, 11), silhouette_k_range=range(2, 11)):
+    """ entrena modelos KMeans usando los metodos del codo y silueta para seleccionar k optimo
+
+    Args:
+        X: dataframe o array con las caracteristicas de entrada
+        random_state (int): semilla para reproducibilidad (default 41)
+        k_range (range): rango de valores de k para el metodo del codo (default range(1, 11))
+        silhouette_k_range (range): rango de valores de k para el metodo de silueta (default range(2, 11))
+
+    Returns:
+        dict: diccionario con k_values, inertia, silhouette_scores, selected_k_elbow,
+              selected_k_silhouette, y strategies con modelos y etiquetas entrenados
+              para los metodos elbow y silhouette
+    """
     X_train = X.copy() if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
     k_values = list(k_range)
     silhouette_values = list(silhouette_k_range)
@@ -438,6 +1127,7 @@ def train_kmeans_models(X, random_state=41, k_range=range(1, 11), silhouette_k_r
             silhouette_model_score = silhouette_score(X_train, silhouette_labels)
 
     return {
+        # Valores evaluados para la graficacion de los valores del codo y silueta
         'k_values': k_values,
         'silhouette_k_values': silhouette_values,
         'inertia': inertia,
@@ -446,6 +1136,7 @@ def train_kmeans_models(X, random_state=41, k_range=range(1, 11), silhouette_k_r
         'selected_k_silhouette': silhouette_k,
         'selected_silhouette_score': silhouette_best_score,
         'strategies': {
+            # Modelos y resultados para cada estrategia de selección de k
             'elbow': {
                 'selected_k': elbow_k,
                 'inertia': elbow_model.inertia_ if elbow_model is not None else None,
@@ -453,6 +1144,7 @@ def train_kmeans_models(X, random_state=41, k_range=range(1, 11), silhouette_k_r
                 'labels': elbow_labels,
                 'model': elbow_model,
             },
+            # Modelos y resultados para la estrategia de selección basada en silueta
             'silhouette': {
                 'selected_k': silhouette_k,
                 'inertia': silhouette_model.inertia_ if silhouette_model is not None else None,
@@ -464,21 +1156,34 @@ def train_kmeans_models(X, random_state=41, k_range=range(1, 11), silhouette_k_r
     }
 
 
-def K_means(X, y):
-    return train_kmeans_models(X)
 
-
-def DBSCAN(X, y):
-    return train_dbscan_model(X)
 
 
 def _as_numpy_matrix(X):
+    """ convierte un dataframe o array a un numpy array
+
+    Args:
+        X: dataframe de pandas o array-like a convertir
+
+    Returns:
+        np.ndarray: representacion como numpy array
+    """
     if isinstance(X, pd.DataFrame):
         return X.to_numpy()
     return np.asarray(X)
 
 
 def _safe_dbscan_silhouette_score(X, labels, noise_label=-1):
+    """ calcula el silhouette score para DBSCAN excluyendo puntos etiquetados como ruido
+
+    Args:
+        X: dataframe o array con las caracteristicas de entrada
+        labels: array con las etiquetas de cluster asignadas por DBSCAN
+        noise_label (int): valor de la etiqueta que representa ruido (default -1)
+
+    Returns:
+        float or None: silhouette score sobre puntos no ruido, o None si hay menos de 2 clusters
+    """
     X_matrix = _as_numpy_matrix(X)
     labels = np.asarray(labels)
     usable_mask = labels != noise_label
@@ -502,6 +1207,17 @@ def _safe_dbscan_silhouette_score(X, labels, noise_label=-1):
 
 
 def _estimate_dbscan_eps(X, min_samples, fallback_percentile=90):
+    """ estima el valor optimo de eps para DBSCAN usando el metodo de la distancia k mas cercana
+
+    Args:
+        X: dataframe o array con las caracteristicas de entrada
+        min_samples (int): valor de min_samples que se usara en DBSCAN
+        fallback_percentile (int): percentil para calcular eps por defecto si no se detecta codo (default 90)
+
+    Returns:
+        eps (float): valor de eps estimado
+        k_distances (np.ndarray): distancias ordenadas al k-vecino mas cercano
+    """
     X_matrix = _as_numpy_matrix(X)
     n_samples = X_matrix.shape[0]
 
@@ -534,9 +1250,28 @@ def _estimate_dbscan_eps(X, min_samples, fallback_percentile=90):
 
 
 def _build_dbscan_eps_candidates(estimated_eps, k_distances, fallback_percentile=90):
+    """ genera candidatos de eps para DBSCAN a partir del estimado y percentiles de distancias k
+
+    Args:
+        estimated_eps (float): valor de eps estimado previamente
+        k_distances (np.ndarray): distancias ordenadas al k-vecino mas cercano
+        fallback_percentile (int): percentil usado como referencia (default 90)
+
+    Returns:
+        dict: diccionario con candidatos de eps, donde cada entrada tiene 'eps' y 'sources'
+    """
     candidate_map = {}
 
     def _add_candidate(value, source):
+        """Agrega un candidato de eps a la lista de candidatos de DBSCAN.
+
+        Args:
+            value (float): valor de eps a evaluar.
+            source (str): origen o etiqueta de este candidato.
+
+        Returns:
+            None: modifica candidate_map en el cierre exterior.
+        """
         if value is None:
             return
         if not np.isfinite(value) or value <= 0:
@@ -565,6 +1300,16 @@ def _build_dbscan_eps_candidates(estimated_eps, k_distances, fallback_percentile
 
 
 def _evaluate_dbscan_candidate(X, min_samples, candidate):
+    """Evalúa un candidato de configuración para DBSCAN.
+
+    Args:
+        X: dataframe o array con las características de entrada.
+        min_samples (int): valor de min_samples para DBSCAN.
+        candidate (dict): candidato con claves 'eps' y 'sources'.
+
+    Returns:
+        dict: resultados del candidato incluyendo modelo, etiquetas, conteo de clusters, ruido y puntuación de silueta.
+    """
     X_matrix = _as_numpy_matrix(X)
     eps = float(candidate['eps'])
     model = SklearnDBSCAN(eps=eps, min_samples=min_samples)
@@ -590,6 +1335,15 @@ def _evaluate_dbscan_candidate(X, min_samples, candidate):
 
 
 def _select_best_dbscan_candidate(candidate_results, fallback_result):
+    """Selecciona el mejor candidato DBSCAN según métrica de silueta y calidad de cluster.
+
+    Args:
+        candidate_results (list[dict]): resultados de evaluación de candidatos de eps.
+        fallback_result (dict): resultado a usar si no hay candidatos válidos.
+
+    Returns:
+        tuple: candidato seleccionado, motivo de selección, si se usó fallback, y lista de candidatos válidos.
+    """
     valid_candidates = [candidate for candidate in candidate_results if candidate['valid_for_selection']]
 
     if valid_candidates:
@@ -613,6 +1367,15 @@ def _select_best_dbscan_candidate(candidate_results, fallback_result):
 
 
 def train_dbscan_model(X, min_samples=None):
+    """Entrena y selecciona el mejor modelo DBSCAN para un conjunto de datos.
+
+    Args:
+        X: dataframe o array con las características de entrada.
+        min_samples (int, optional): valor inicial de min_samples para DBSCAN.
+
+    Returns:
+        dict: informe con modelo seleccionado, eps, etiquetas, conteo de clusters y métricas de silueta.
+    """
     X_matrix = _as_numpy_matrix(X)
     if X_matrix.size == 0:
         return {
@@ -690,633 +1453,327 @@ def train_dbscan_model(X, min_samples=None):
     }
 
 
-def _kmeans_preprocessing_label(params):
-    return f"CC(si), ED({params['escalado']}), outliers({params['outliers']}), balanceo({params['balanceo']})"
 
 
-def _fit_kmeans_variant(df, params, random_state=41):
-    prepared = prepare_unsupervised_data(df, **params)
-    report = train_kmeans_models(prepared['X'], random_state=random_state)
+def graficar_Kmeans(X, model, title="Clusters K-Means"):
+    """Muestra un gráfico de clusters KMeans en espacio PCA de dos dimensiones.
 
-    best_strategy = report['strategies']['silhouette']
-    if best_strategy['model'] is None:
-        best_strategy = report['strategies']['elbow']
+    Args:
+        X: dataframe o array con las características de entrada.
+        model: modelo KMeans entrenado.
+        title (str, optional): título del gráfico.
 
-    return {
-        'params': params,
-        'label': _kmeans_preprocessing_label(params),
-        'prepared': prepared,
-        'report': report,
-        'prediction_strategy': best_strategy,
-    }
+    Returns:
+        None: muestra un scatter plot de clusters y centroides.
+    """
+    pca = PCA(n_components=2)
 
+    X_pca = pca.fit_transform(X)
+    centroids_pca = pca.transform(model.cluster_centers_)
 
-def _build_kmeans_summary_row(index, variant_result):
-    report = variant_result['report']
-    strategy_name, strategy = _select_kmeans_strategy(report)
+    plt.figure(figsize=(8,6))
 
-    return {
-        'Version': index,
-        'Preprocessing': variant_result['label'],
-        'KMeans inertia': round(strategy['inertia'], 4) if strategy['inertia'] is not None else None,
-        'KMeans silhouette_score': round(strategy['silhouette_score'], 4) if strategy['silhouette_score'] is not None else None,
-    }
+    plt.scatter(
+        X_pca[:,0],
+        X_pca[:,1],
+        c=model.labels_,
+        cmap='viridis',
+        alpha=0.6
+    )
 
+    plt.scatter(
+        centroids_pca[:,0],
+        centroids_pca[:,1],
+        marker='X',
+        s=300,
+        linewidths=2,
+        edgecolors='black',
+        label='Centroides'
+    )
 
-def _select_kmeans_strategy(report):
-    strategy_name = 'silhouette'
-    strategy = report['strategies'][strategy_name]
-
-    if strategy['model'] is None:
-        strategy_name = 'elbow'
-        strategy = report['strategies'][strategy_name]
-
-    return strategy_name, strategy
-
-
-def _build_cluster_member_frame(df, prepared, labels):
-    source_indices = np.asarray(prepared['source_indices'])
-    labels = np.asarray(labels)
-
-    valid_mask = source_indices != -1
-    if not np.any(valid_mask):
-        return pd.DataFrame(columns=list(df.columns) + ['cluster'])
-
-    valid_source_indices = source_indices[valid_mask].astype(int)
-    valid_labels = labels[valid_mask]
-
-    cluster_frame = df.iloc[valid_source_indices].copy()
-    cluster_frame['cluster'] = valid_labels
-    return cluster_frame
+    plt.title(title)
+    plt.legend()
+    plt.show()
 
 
-def _print_cluster_crosstabs(df, prepared, labels, title, type_label_map=None):
-    cluster_frame = _build_cluster_member_frame(df, prepared, labels)
+def graficar_dbscan(X, labels):
+    """Visualiza los clusters encontrados por DBSCAN en dos dimensiones con PCA.
 
-    print(f"\n{title}")
-    if cluster_frame.empty:
-        print("No eligible original rows available for cross-tabs.")
-        return
+    Args:
+        X (pd.DataFrame or np.ndarray): características de entrada.
+        labels (np.ndarray): etiquetas de cluster producidas por DBSCAN.
 
-    quality_table = pd.crosstab(cluster_frame['cluster'], cluster_frame['quality'])
-    print("Cluster vs quality:")
-    print(quality_table.to_string())
+    Returns:
+        None: muestra un scatter plot de los clusters en PCA.
+    """
+    # Reducir dimensiones
+    pca = PCA(n_components=2)
+    X_pca = pca.fit_transform(X)
 
-    type_series = cluster_frame['type']
-    if type_label_map is not None:
-        type_series = type_series.map(type_label_map).fillna(type_series)
+    # Clusters encontrados
+    unique_labels = np.unique(labels)
 
-    type_table = pd.crosstab(cluster_frame['cluster'], type_series)
-    print("Cluster vs type:")
-    print(type_table.to_string())
+    plt.figure(figsize=(10, 6))
 
+    for label in unique_labels:
+        mask = labels == label
 
-def mostrar_tablas_cruzadas_clustering(df, variant_results):
-    for index, variant_result in enumerate(variant_results, 1):
-        prepared = variant_result['prepared']
-        type_label_map = {0: 'white', 1: 'red'}
-
-        strategy_name, strategy = _select_kmeans_strategy(variant_result['report'])
-        if strategy['labels'] is not None:
-            kmeans_title = (
-                f"KMeans cross-tabs - Variación {index}: {variant_result['label']} "
-                f"({strategy_name}, K={strategy['selected_k']})"
-            )
-            _print_cluster_crosstabs(
-                df,
-                prepared,
-                strategy['labels'],
-                kmeans_title,
-                type_label_map=type_label_map,
-            )
-
-        dbscan_report = variant_result.get('dbscan_report', {})
-        if dbscan_report.get('labels') is not None:
-            eps_label = f"{dbscan_report['eps']:.4f}" if dbscan_report.get('eps') is not None else 'N/D'
-            dbscan_title = (
-                f"DBSCAN cross-tabs - Variación {index}: {variant_result['label']} "
-                f"(eps={eps_label}, min_samples={dbscan_report.get('min_samples')})"
-            )
-            _print_cluster_crosstabs(
-                df,
-                prepared,
-                dbscan_report['labels'],
-                dbscan_title,
-                type_label_map=type_label_map,
-            )
-
-
-def _build_dbscan_summary_row(index, variant_result):
-    report = variant_result['dbscan_report']
-    labels = np.asarray(report['labels'])
-    unique_labels = sorted(int(label) for label in np.unique(labels))
-
-    return {
-        'Version': index,
-        'Preprocessing': variant_result['label'],
-        'DBSCAN eps estimado': round(report['estimated_eps'], 4) if report.get('estimated_eps') is not None else None,
-        'DBSCAN eps': round(report['eps'], 4) if report['eps'] is not None else None,
-        'DBSCAN min_samples': int(report['min_samples']) if report['min_samples'] is not None else None,
-        'DBSCAN labels': unique_labels,
-        'DBSCAN cluster_count': int(report['cluster_count']),
-        'DBSCAN noise_count': int(report['noise_count']),
-        'DBSCAN silhouette_score': round(report['silhouette_score'], 4) if report['silhouette_score'] is not None else None,
-        'DBSCAN candidatos': len(report.get('eps_candidates', [])),
-        'DBSCAN criterio': report.get('selection_reason'),
-    }
-
-
-def _build_kmeans_prediction_cases(df, variant_result, strategy_name, case_indices=(0, 1, 2)):
-    prepared = variant_result['prepared']
-    strategy = variant_result['report']['strategies'][strategy_name]
-    model = strategy['model']
-    if model is None:
-        return []
-
-    cases = []
-    for case_number, row_index in enumerate(case_indices, 1):
-        raw_row = df.iloc[[row_index]][prepared['feature_columns']].copy()
-        if prepared['scaler'] is not None:
-            row_for_model = pd.DataFrame(
-                prepared['scaler'].transform(raw_row),
-                columns=prepared['feature_columns'],
-                index=raw_row.index,
+        # Ruido
+        if label == -1:
+            plt.scatter(
+                X_pca[mask, 0],
+                X_pca[mask, 1],
+                marker='x',
+                label='Ruido',
+                alpha=0.6
             )
         else:
-            row_for_model = raw_row.copy()
-
-        predicted_cluster = int(model.predict(row_for_model)[0])
-        centroid_distances = model.transform(row_for_model)[0].round(4).tolist()
-
-        cases.append({
-            'strategy': strategy_name,
-            'case': case_number,
-            'row_index': int(df.index[row_index]),
-            'predicted_cluster': predicted_cluster,
-            'distances_to_centroids': centroid_distances,
-        })
-
-    return cases
-
-
-def _build_dbscan_case_reports(df, variant_result, case_count=3):
-    prepared = variant_result['prepared']
-    labels = np.asarray(variant_result['dbscan_report']['labels'])
-    source_indices = np.asarray(prepared['source_indices'])
-
-    valid_positions = np.flatnonzero(source_indices >= 0)
-    selected_positions = list(valid_positions[:case_count])
-
-    if len(selected_positions) < case_count:
-        for position in range(len(labels)):
-            if position not in selected_positions and source_indices[position] >= 0:
-                selected_positions.append(position)
-            if len(selected_positions) == case_count:
-                break
-
-    cases = []
-    for case_number, position in enumerate(selected_positions[:case_count], 1):
-        cases.append({
-            'case': case_number,
-            'source_row_index': int(source_indices[position]),
-            'prepared_position': int(position),
-            'dbscan_label': int(labels[position]),
-            'is_noise': bool(labels[position] == -1),
-        })
-
-    return cases
-
-
-def generar_reporte_kmeans(df, variaciones, case_indices=(0, 1, 2)):
-    variant_results = []
-    summary_rows = []
-
-    for index, params in enumerate(variaciones, 1):
-        variant_result = _fit_kmeans_variant(df, params)
-        elbow_predictions = _build_kmeans_prediction_cases(df, variant_result, 'elbow', case_indices=case_indices)
-        silhouette_predictions = _build_kmeans_prediction_cases(df, variant_result, 'silhouette', case_indices=case_indices)
-        variant_result['predictions_by_strategy'] = {
-            'elbow': elbow_predictions,
-            'silhouette': silhouette_predictions,
-        }
-        variant_result['predictions'] = elbow_predictions + silhouette_predictions
-        variant_results.append(variant_result)
-        summary_rows.append(_build_kmeans_summary_row(index, variant_result))
-
-    summary_df = pd.DataFrame(summary_rows)
-    return summary_df, variant_results
-
-
-def generar_reporte_no_supervisado(df, variaciones, case_indices=(0, 1, 2)):
-    variant_results = []
-    summary_rows = []
-
-    for index, params in enumerate(variaciones, 1):
-        variant_result = _fit_kmeans_variant(df, params)
-        dbscan_report = train_dbscan_model(variant_result['prepared']['X'])
-        variant_result['dbscan_report'] = dbscan_report
-        variant_result['dbscan_predictions'] = _build_dbscan_case_reports(df, variant_result, case_count=len(case_indices))
-        variant_results.append(variant_result)
-        summary_rows.append({
-            **_build_kmeans_summary_row(index, variant_result),
-            **_build_dbscan_summary_row(index, variant_result),
-        })
-
-    summary_df = pd.DataFrame(summary_rows)
-    return summary_df, variant_results
-
-
-def graficar_silhouette_kmeans(variant_results):
-    labels = [f'V{i}' for i in range(1, len(variant_results) + 1)]
-    scores = []
-
-    for variant_result in variant_results:
-        strategy = variant_result['report']['strategies']['silhouette']
-        if strategy['silhouette_score'] is None:
-            strategy = variant_result['report']['strategies']['elbow']
-        scores.append(strategy['silhouette_score'] if strategy['silhouette_score'] is not None else 0)
-
-    plt.figure(figsize=(10, 5))
-    plt.bar(labels, scores, color='steelblue')
-    plt.title('KMeans silhouette score por variación')
-    plt.xlabel('Variación')
-    plt.ylabel('Silhouette score')
-    plt.ylim(0, 1)
-    plt.grid(axis='y', alpha=0.3)
-    plt.tight_layout()
-    plt.show()
-
-
-def graficar_silhouette_dbscan(variant_results):
-    labels = [f'V{i}' for i in range(1, len(variant_results) + 1)]
-    scores = []
-
-    for variant_result in variant_results:
-        score = variant_result['dbscan_report']['silhouette_score']
-        scores.append(score if score is not None else 0)
-
-    plt.figure(figsize=(10, 5))
-    plt.bar(labels, scores, color='mediumpurple')
-    plt.title('DBSCAN silhouette score por variación')
-    plt.xlabel('Variación')
-    plt.ylabel('Silhouette score')
-    plt.ylim(-1, 1)
-    plt.grid(axis='y', alpha=0.3)
-    plt.tight_layout()
-    plt.show()
-
-
-def graficar_elbow_comparativo_kmeans(variant_results):
-    if not variant_results:
-        return
-
-    fig, ax = plt.subplots(figsize=(12, 7))
-    cmap = plt.get_cmap('tab10')
-
-    all_k_values = set()
-    for index, variant_result in enumerate(variant_results, 1):
-        report = variant_result['report']
-        k_values = report['k_values']
-        inertia = report['inertia']
-        selected_k = report['selected_k_elbow']
-        color = cmap((index - 1) % 10)
-
-        all_k_values.update(k_values)
-        legend_label = f"V{index}" if selected_k is None else f"V{index} (K={selected_k})"
-
-        ax.plot(
-            k_values,
-            inertia,
-            marker='o',
-            linewidth=1.8,
-            markersize=4,
-            label=legend_label,
-            color=color,
-            alpha=0.85,
-        )
-
-        if selected_k in k_values:
-            selected_index = k_values.index(selected_k)
-            ax.scatter(
-                [selected_k],
-                [inertia[selected_index]],
-                color=color,
-                s=55,
-                zorder=5,
-                edgecolors='black',
-                linewidths=0.5,
+            plt.scatter(
+                X_pca[mask, 0],
+                X_pca[mask, 1],
+                label=f'Cluster {label}',
+                alpha=0.7
             )
 
-    ax.set_title('Comparativa de curvas elbow de KMeans por variación')
-    ax.set_xlabel('K values')
-    ax.set_ylabel('Inertia')
-    ax.set_xticks(sorted(all_k_values))
+    plt.title("Clusters generados por DBSCAN (PCA)")
+    plt.xlabel("Componente Principal 1")
+    plt.ylabel("Componente Principal 2")
+    plt.legend()
+    plt.grid(True)
+    plt.show()    
+
+def graficar_funciones_no_supervisadas(sil_kv, X, db_labv):
+    """Grafica los resultados de KMeans para un conjunto de datos y modelo entrenado.
+
+    Args:
+        sil_kv: modelo KMeans entrenado o estrategia de selección previa.
+        X: dataframe o array con las características de entrada.
+
+    Returns:
+        None: muestra el gráfico de clusters KMeans.
+    """
+    graficar_Kmeans(X,sil_kv)
+    graficar_dbscan(X,db_labv)
+
+
+def crear_tabla_no_supervisada(kmeans_reports, dbscan_reports):
+    import pandas as pd
+
+    filas = []
+    for i in range(8):
+        kr = kmeans_reports[i]
+        dr = dbscan_reports[i]
+
+        strategy_sil = kr['strategies']['silhouette']
+        strategy_elb = kr['strategies']['elbow']
+
+        k_inertia = strategy_sil['inertia'] if strategy_sil['inertia'] is not None else strategy_elb['inertia']
+        k_sil = strategy_sil['silhouette_score'] if strategy_sil['silhouette_score'] is not None else strategy_elb['silhouette_score']
+
+        filas.append([
+            f'v{i+1}',
+            round(k_inertia, 4) if k_inertia is not None else None,
+            round(k_sil, 4) if k_sil is not None else None,
+            dr['cluster_count'],
+            dr['noise_count'],
+            round(dr['silhouette_score'], 4) if dr['silhouette_score'] is not None else None,
+        ])
+
+    columnas = pd.MultiIndex.from_tuples([
+        ('', 'Versión'),
+        ('KMeans', 'Inercia'),
+        ('KMeans', 'Silhouette'),
+        ('DBSCAN', 'Clusters'),
+        ('DBSCAN', 'Ruido'),
+        ('DBSCAN', 'Silhouette'),
+    ])
+
+    return pd.DataFrame(filas, columns=columnas)
+
+def graficar_silhouette_por_algoritmo(kmeans_reports, dbscan_reports):
+    """ grafica el silhouette score de KMeans y DBSCAN para las 8 variaciones en barras
+
+    Args:
+        kmeans_reports (list[dict]): lista con los 8 reportes de train_kmeans_models
+        dbscan_reports (list[dict]): lista con los 8 reportes de train_dbscan_model
+
+    Returns:
+        None: muestra la grafica con plt.show()
+    """
+    kmeans_sils = [r['strategies']['silhouette']['silhouette_score'] for r in kmeans_reports]
+    dbscan_sils = [r['silhouette_score'] for r in dbscan_reports]
+
+    x = np.arange(8)
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(x - width/2, kmeans_sils, width, label='KMeans', color='#1565C0', edgecolor='black')
+    ax.bar(x + width/2, dbscan_sils, width, label='DBSCAN', color='#E65100', edgecolor='black')
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([f'v{i+1}' for i in range(8)])
+    ax.set_xlabel('Variación')
+    ax.set_ylabel('Silhouette Score')
+    ax.set_title('Silhouette Score por variación - KMeans vs DBSCAN')
+    ax.legend()
     ax.grid(axis='y', alpha=0.3)
-    ax.legend(ncol=2, fontsize=8)
-
     plt.tight_layout()
     plt.show()
-
-
-def graficar_clusters_pca_kmeans(variant_results):
-    if not variant_results:
-        return
-
-    n_rows = len(variant_results)
-    fig, axes = plt.subplots(n_rows, 2, figsize=(18, 4 * n_rows), sharex=True, sharey=True)
-    if n_rows == 1:
-        axes = np.array([axes])
-
-    strategy_info = [
-        ('elbow', 'Elbow'),
-        ('silhouette', 'Silhouette'),
-    ]
-    cmap = plt.get_cmap('tab10')
-
-    for row_index, variant_result in enumerate(variant_results):
-        prepared = variant_result['prepared']
-        X_variant = prepared['X']
-        X_variant_matrix = X_variant.to_numpy() if isinstance(X_variant, pd.DataFrame) else np.asarray(X_variant)
-        pca = PCA(n_components=2)
-        X_pca = pca.fit_transform(X_variant_matrix)
-
-        for col_index, (strategy_name, strategy_title) in enumerate(strategy_info):
-            ax = axes[row_index, col_index]
-            strategy = variant_result['report']['strategies'][strategy_name]
-            model = strategy['model']
-            labels = strategy['labels']
-
-            if model is None or labels is None:
-                ax.set_axis_off()
-                continue
-
-            labels = np.asarray(labels)
-            unique_labels = np.unique(labels)
-            for cluster_id in unique_labels:
-                cluster_mask = labels == cluster_id
-                ax.scatter(
-                    X_pca[cluster_mask, 0],
-                    X_pca[cluster_mask, 1],
-                    s=8,
-                    alpha=0.65,
-                    color=cmap(int(cluster_id) % 10),
-                    edgecolors='none',
-                )
-
-            centroid_pca = pca.transform(model.cluster_centers_)
-            ax.scatter(
-                centroid_pca[:, 0],
-                centroid_pca[:, 1],
-                s=140,
-                c='black',
-                marker='X',
-                edgecolors='white',
-                linewidths=0.8,
-                zorder=5,
-            )
-
-            selected_k = strategy['selected_k']
-            ax.set_title(f"V{row_index + 1} - {strategy_title} (K={selected_k})", fontsize=9)
-            if row_index == n_rows - 1:
-                ax.set_xlabel('PC1')
-            if col_index == 0:
-                ax.set_ylabel('PC2')
-            ax.grid(alpha=0.2)
-            ax.tick_params(labelsize=7)
-
-    fig.suptitle('KMeans clusters projected with PCA (8 variants x 2 strategies)', fontsize=14)
-    plt.tight_layout(rect=[0, 0.02, 1, 0.98])
-    plt.show()
-
-
-def graficar_clusters_pca_dbscan(variant_results):
-    if not variant_results:
-        return
-
-    n_rows = len(variant_results)
-    fig, axes = plt.subplots(n_rows, 1, figsize=(14, 4 * n_rows), sharex=True, sharey=True)
-    if n_rows == 1:
-        axes = np.array([axes])
-
-    cmap = plt.get_cmap('tab10')
-
-    for row_index, variant_result in enumerate(variant_results):
-        prepared = variant_result['prepared']
-        X_variant = prepared['X']
-        X_variant_matrix = X_variant.to_numpy() if isinstance(X_variant, pd.DataFrame) else np.asarray(X_variant)
-        if X_variant_matrix.shape[1] >= 2:
-            pca = PCA(n_components=2)
-            X_pca = pca.fit_transform(X_variant_matrix)
-        else:
-            X_pca = np.column_stack([X_variant_matrix[:, 0], np.zeros(X_variant_matrix.shape[0])])
-
-        report = variant_result['dbscan_report']
-        labels = np.asarray(report['labels'])
-        ax = axes[row_index]
-
-        if labels.size == 0:
-            ax.set_axis_off()
-            continue
-
-        unique_labels = sorted(np.unique(labels), key=lambda value: (value == -1, value))
-        for cluster_id in unique_labels:
-            cluster_mask = labels == cluster_id
-            if cluster_id == -1:
-                ax.scatter(
-                    X_pca[cluster_mask, 0],
-                    X_pca[cluster_mask, 1],
-                    s=22,
-                    alpha=0.9,
-                    color='black',
-                    marker='x',
-                    label='Ruido',
-                )
-            else:
-                ax.scatter(
-                    X_pca[cluster_mask, 0],
-                    X_pca[cluster_mask, 1],
-                    s=18,
-                    alpha=0.7,
-                    color=cmap(int(cluster_id) % 10),
-                    edgecolors='none',
-                    label=f'Clúster {int(cluster_id)}',
-                )
-
-        eps_label = f"{report['eps']:.3f}" if report['eps'] is not None else 'N/D'
-        ax.set_title(
-            f"V{row_index + 1} - DBSCAN (eps={eps_label}, min_samples={report['min_samples']})",
-            fontsize=9,
-        )
-        if row_index == n_rows - 1:
-            ax.set_xlabel('PC1')
-        ax.set_ylabel('PC2')
-        ax.grid(alpha=0.2)
-        ax.tick_params(labelsize=7)
-        ax.legend(fontsize=7, ncol=2, loc='best')
-
-    fig.suptitle('Clústeres de DBSCAN proyectados con PCA (8 variantes)', fontsize=14)
-    plt.tight_layout(rect=[0, 0.02, 1, 0.98])
-    plt.show()
-
-
-def mostrar_predicciones_kmeans(variant_results):
-    for index, variant_result in enumerate(variant_results, 1):
-        print(f"\nPredicciones KMeans - Variación {index}: {variant_result['label']}")
-        grouped_predictions = variant_result.get('predictions_by_strategy', {})
-        if not grouped_predictions:
-            grouped_predictions = {}
-            for case in variant_result.get('predictions', []):
-                grouped_predictions.setdefault(case['strategy'], []).append(case)
-
-        for strategy_name, cases in grouped_predictions.items():
-            print(f"  Estrategia {strategy_name}:")
-            for case in cases:
-                print(
-                    f"    Caso {case['case']} (fila {case['row_index']}): "
-                    f"cluster={case['predicted_cluster']}, distancias={case['distances_to_centroids']}"
-                )
-
-
-def mostrar_predicciones_dbscan(variant_results):
-    for index, variant_result in enumerate(variant_results, 1):
-        print(f"\nPredicciones DBSCAN - Variación {index}: {variant_result['label']}")
-        for case in variant_result.get('dbscan_predictions', []):
-            print(
-                f"  Caso {case['case']} (fila original {case['source_row_index']}): "
-                f"label={case['dbscan_label']}, ruido={case['is_noise']}"
-            )
-
-
-def mostrar_candidatos_dbscan(variant_results):
-    for index, variant_result in enumerate(variant_results, 1):
-        report = variant_result['dbscan_report']
-        candidates = report.get('eps_candidates', [])
-        if not candidates:
-            continue
-
-        selected_eps = report.get('eps')
-        filas = []
-        for candidate in candidates:
-            filas.append({
-                'eps': round(candidate['eps'], 4),
-                'fuentes': ', '.join(candidate.get('sources', [])),
-                'clusters': int(candidate.get('cluster_count', 0)),
-                'ruido': int(candidate.get('noise_count', 0)),
-                'silhouette': round(candidate['silhouette_score'], 4) if candidate.get('silhouette_score') is not None else None,
-                'estado': candidate.get('status'),
-                'seleccionado': 'sí' if selected_eps is not None and np.isclose(candidate['eps'], selected_eps) else '',
-            })
-
-        print(f"\nCandidatos de eps DBSCAN - Variación {index}: {variant_result['label']}")
-        print(pd.DataFrame(filas).to_string(index=False))
-
-
-def mostrar_analisis_resultados_no_supervisados(summary_df, variant_results):
-    kmeans_scores = []
-    dbscan_scores = []
-    dbscan_fallbacks = 0
-
-    for variant_result in variant_results:
-        kmeans_strategy = variant_result['report']['strategies']['silhouette']
-        if kmeans_strategy['silhouette_score'] is None:
-            kmeans_strategy = variant_result['report']['strategies']['elbow']
-        if kmeans_strategy['silhouette_score'] is not None:
-            kmeans_scores.append((variant_result['label'], kmeans_strategy['silhouette_score']))
-
-        dbscan_score = variant_result['dbscan_report']['silhouette_score']
-        if dbscan_score is not None:
-            dbscan_scores.append((variant_result['label'], dbscan_score))
-        if variant_result['dbscan_report'].get('selected_from_fallback'):
-            dbscan_fallbacks += 1
-
-    best_kmeans = max(kmeans_scores, key=lambda item: item[1]) if kmeans_scores else None
-    best_dbscan = max(dbscan_scores, key=lambda item: item[1]) if dbscan_scores else None
-    invalid_dbscan = len(variant_results) - len(dbscan_scores)
-
-    print("\nANÁLISIS RÁPIDO")
-    if best_kmeans is not None:
-        print(f"- Mejor KMeans silhouette: {best_kmeans[0]} ({best_kmeans[1]:.4f})")
-    else:
-        print("- Mejor KMeans silhouette: no disponible")
-
-    if best_dbscan is not None:
-        best_dbscan_variant = next((variant for variant in variant_results if variant['label'] == best_dbscan[0]), None)
-        if best_dbscan_variant is not None:
-            report = best_dbscan_variant['dbscan_report']
-            print(
-                f"- Mejor DBSCAN silhouette: {best_dbscan[0]} "
-                f"(eps={report['eps']:.4f}, silhouette={best_dbscan[1]:.4f})"
-            )
-        else:
-            print(f"- Mejor DBSCAN silhouette: {best_dbscan[0]} ({best_dbscan[1]:.4f})")
-    else:
-        print("- Mejor DBSCAN silhouette: no disponible")
-
-    print(f"- DBSCAN sin silhouette válida: {invalid_dbscan}/{len(variant_results)} variantes")
-    print(f"- DBSCAN que usó fallback al eps estimado: {dbscan_fallbacks}/{len(variant_results)} variantes")
-
-
-def ejecutar_flujo_nosupervisado(df, variaciones):
-    print("\n\nFIGURA 3 - Resumen No Supervisado por variación")
-    summary_df, variant_results = generar_reporte_no_supervisado(df, variaciones)
-    print(summary_df.to_string(index=False))
-
-    graficar_clusters_pca_kmeans(variant_results)
-    graficar_clusters_pca_dbscan(variant_results)
-    graficar_silhouette_kmeans(variant_results)
-    graficar_silhouette_dbscan(variant_results)
-    graficar_elbow_comparativo_kmeans(variant_results)
-    mostrar_predicciones_kmeans(variant_results)
-    mostrar_predicciones_dbscan(variant_results)
-    mostrar_candidatos_dbscan(variant_results)
-    mostrar_tablas_cruzadas_clustering(df, variant_results)
-    mostrar_analisis_resultados_no_supervisados(summary_df, variant_results)
-
-    return summary_df, variant_results
 
 
 # Uso:
 
-
-
-
-
-
-
-
-
 if __name__ == "__main__":
-    
-    
+    pass
+
     #variacion 1
-    arbolv1, knnv1, svmv1,modelov1, Columna_xv1, Xv1, yv1, knn_modelv1 = variacion_no_supervisada(v1)
+    printeo("Ejecutando variacion 1 supervisada...")
+    arbolv1, knnv1, svmv1,modelov1, Columna_xv1, Xv1, yv1, knn_modelv1, red_neuronalv1 = variacion_supervisada(v1)    
+    # #variacion 2
+    # printeo("Ejecutando variacion 2 supervisada...")
+    # arbolv2, knnv2, svmv2,modelov2, Columna_xv2, Xv2, yv2, knn_modelv2, red_neuronalv2 = variacion_supervisada(v2)
+    # #variacion 3
+    # printeo("Ejecutando variacion 3 supervisada...")
+    # arbolv3, knnv3, svmv3,modelov3, Columna_xv3, Xv3, yv3, knn_modelv3, red_neuronalv3 = variacion_supervisada(v3)
+    # #variacion 4
+    # printeo("Ejecutando variacion 4 supervisada...")
+    # arbolv4, knnv4, svmv4,modelov4, Columna_xv4, Xv4, yv4, knn_modelv4, red_neuronalv4 = variacion_supervisada(v4)
+    # #variacion 5
+    # printeo("Ejecutando variacion 5 supervisada...")
+    # arbolv5, knnv5, svmv5,modelov5, Columna_xv5, Xv5, yv5, knn_modelv5, red_neuronalv5 = variacion_supervisada(v5)
+
+    # #variacion 6
+    # printeo("Ejecutando variacion 6 supervisada...")
+    # arbolv6, knnv6, svmv6,modelov6, Columna_xv6, Xv6, yv6, knn_modelv6, red_neuronalv6 = variacion_supervisada(v6)
+    # #variacion 7
+    # printeo("Ejecutando variacion 7 supervisada...")
+    # arbolv7, knnv7, svmv7,modelov7, Columna_xv7, Xv7, yv7, knn_modelv7, red_neuronalv7 = variacion_supervisada(v7)
+    # #variacion 8
+    # printeo("Ejecutando variacion 8 supervisada...")
+    # arbolv8, knnv8, svmv8,modelov8, Columna_xv8, Xv8, yv8, knn_modelv8, red_neuronalv8 = variacion_supervisada(v8)
     
-    #variacion 2
-    arbolv2, knnv2, svmv2,modelov2, Columna_xv2, Xv2, yv2, knn_modelv2 = variacion_no_supervisada(v2)
+    #graficar comparacion de las 8 variaciones en tabla panda
+    # tabla=grafico_comparacion_supervisada(arbolv1, knnv1, svmv1, red_neuronalv1, arbolv2, knnv2, svmv2, red_neuronalv2, arbolv3, knnv3, svmv3, red_neuronalv3, arbolv4, knnv4, svmv4, red_neuronalv4, 
+    #                     arbolv5, knnv5, svmv5, red_neuronalv5, arbolv6, knnv6, svmv6, red_neuronalv6, arbolv7, knnv7, svmv7, red_neuronalv7, arbolv8, knnv8, svmv8, red_neuronalv8)
+    # print(tabla)
+    # graficar_tabla_comparacion(tabla)
     
-    #variacion 3
-    arbolv3, knnv3, svmv3,modelov3, Columna_xv3, Xv3, yv3, knn_modelv3 = variacion_no_supervisada(v3)
     
-    #variacion 4
-    arbolv4, knnv4, svmv4,modelov4, Columna_xv4, Xv4, yv4, knn_modelv4 = variacion_no_supervisada(v4)
+    # # variables para graficar comparacion de metricas entre las 8 variaciones para cada algoritmo
+    # arboles = [arbolv1, arbolv2, arbolv3, arbolv4, arbolv5, arbolv6, arbolv7, arbolv8]
+    # knns    = [knnv1, knnv2, knnv3, knnv4, knnv5, knnv6, knnv7, knnv8]
+    # svms    = [svmv1, svmv2, svmv3, svmv4, svmv5, svmv6, svmv7, svmv8]
+    # redes   = [red_neuronalv1, red_neuronalv2, red_neuronalv3, red_neuronalv4,
+    #         red_neuronalv5, red_neuronalv6, red_neuronalv7, red_neuronalv8]
     
-    #variacion 5
-    arbolv5, knnv5, svmv5,modelov5, Columna_xv5, Xv5, yv5, knn_modelv5 = variacion_no_supervisada(v5)
     
-    #variacion 6
-    arbolv6, knnv6, svmv6,modelov6, Columna_xv6, Xv6, yv6, knn_modelv6 = variacion_no_supervisada(v6)
+    # graficar comparacion de metricas entre las 8 variaciones para cada algoritmo
+    #printeo("Graficando comparacion de F1-Score máximo por algoritmo...")
+    # graficar_f1_maximo_supervisado(arboles, knns, svms, redes)
     
-    #variacion 7
-    arbolv7, knnv7, svmv7,modelov7, Columna_xv7, Xv7, yv7, knn_modelv7 = variacion_no_supervisada(v7)
+    #printeo("Graficando comparacion de F1-Score medio por normalizacion y algoritmo...")
+    #graficar_f1_medio_por_normalizacion(arboles, knns, svms, redes)
     
-    #variacion 8
-    arbolv8, knnv8, svmv8,modelov8, Columna_xv8, Xv8, yv8, knn_modelv8 = variacion_no_supervisada(v8)
+    # printeo("Graficando comparacion de F1-Score medio por outliers y algoritmo...")
+    # graficar_f1_medio_por_outliers(arboles, knns, svms, redes)
     
-    grafico_comparacion(arbolv1, knnv1, svmv1, arbolv2, knnv2, svmv2, arbolv3, knnv3, svmv3, arbolv4, knnv4, svmv4, 
-                        arbolv5, knnv5, svmv5, arbolv6, knnv6, svmv6, arbolv7, knnv7, svmv7, arbolv8, knnv8, svmv8)
+    #grafico
+    # printeo("Graficando comparacion de F1-Score medio por balanceo y algoritmo...")
+    # graficar_f1_medio_por_balanceo(arboles, knns, svms, redes)
     
-    #graficar arbol y knn de la variacion 1
-    graficar_funciones(knn_modelv1, modelov1, Columna_xv1, Xv1, yv1)
+    # printeo("Graficando curva ROC y Precision-Recall para la variacion 8...")
+    # graficar_roc_pr_v8(Xv8, yv8)
+    
+    #graficar arbol, knn y svm de la variacion 1 a la 8
+    
+    # printeo("Graficos de arbol, knn y svm para variacion 1")
+    # graficar_funciones_supervisadas(knn_modelv1, modelov1, Columna_xv1, Xv1, yv1)
+    # printeo("Graficos de arbol, knn y svm para variacion 2")
+    # graficar_funciones_supervisadas(knn_modelv2, modelov2, Columna_xv2, Xv2, yv2)
+    # printeo("Graficos de arbol, knn y svm para variacion 3")
+    # graficar_funciones_supervisadas(knn_modelv3, modelov3, Columna_xv3, Xv3, yv3)
+    # printeo("Graficos de arbol, knn y svm para variacion 4")
+    # graficar_funciones_supervisadas(knn_modelv4, modelov4, Columna_xv4, Xv4, yv4)
+    # printeo("Graficos de arbol, knn y svm para variacion 5")
+    # graficar_funciones_supervisadas(knn_modelv5, modelov5, Columna_xv5, Xv5, yv5)
+    # printeo("Graficos de arbol, knn y svm para variacion 6")
+    # graficar_funciones_supervisadas(knn_modelv6, modelov6, Columna_xv6, Xv6, yv6)
+    # printeo("Graficos de arbol, knn y svm para variacion 7")
+    # graficar_funciones_supervisadas(knn_modelv7, modelov7, Columna_xv7, Xv7, yv7)
+    # printeo("Graficos de arbol, knn y svm para variacion 8")
+    # graficar_funciones_supervisadas(knn_modelv8, modelov8, Columna_xv8, Xv8, yv8)
+    
+    
+    
+    
     
     # flujo KMeans
-    ejecutar_flujo_nosupervisado(df, variaciones)
+        # flujo no supervisado
+        
+    # printeo("Ejecutando variacion 1 no supervisada...")
+    # (kmeansv1, km_elbowv1, km_silv1, elbow_kv1, sil_kv1,
+    # dbscanv1, db_modv1, epsv1, db_labv1) = variacion_no_supervisada(v1)
+
+    # printeo("Ejecutando variacion 2 no supervisada...")
+    # (kmeansv2, km_elbowv2, km_silv2, elbow_kv2, sil_kv2,
+    #  dbscanv2, db_modv2, epsv2, db_labv2) = variacion_no_supervisada(v2)
+
+    # printeo("Ejecutando variacion 3 no supervisada...")
+    # (kmeansv3, km_elbowv3, km_silv3, elbow_kv3, sil_kv3,
+    #  dbscanv3, db_modv3, epsv3, db_labv3) = variacion_no_supervisada(v3)
+
+    # printeo("Ejecutando variacion 4 no supervisada...")
+    # (kmeansv4, km_elbowv4, km_silv4, elbow_kv4, sil_kv4,
+    #  dbscanv4, db_modv4, epsv4, db_labv4) = variacion_no_supervisada(v4)
+
+    # printeo("Ejecutando variacion 5 no supervisada...")
+    # (kmeansv5, km_elbowv5, km_silv5, elbow_kv5, sil_kv5,
+    #  dbscanv5, db_modv5, epsv5, db_labv5) = variacion_no_supervisada(v5)
+
+    # printeo("Ejecutando variacion 6 no supervisada...")
+    # (kmeansv6, km_elbowv6, km_silv6, elbow_kv6, sil_kv6,
+    #  dbscanv6, db_modv6, epsv6, db_labv6) = variacion_no_supervisada(v6)
+
+    # printeo("Ejecutando variacion 7 no supervisada...")
+    # (kmeansv7, km_elbowv7, km_silv7, elbow_kv7, sil_kv7,
+    #  dbscanv7, db_modv7, epsv7, db_labv7) = variacion_no_supervisada(v7)
+
+    # printeo("Ejecutando variacion 8 no supervisada...")
+    # (kmeansv8, km_elbowv8, km_silv8, elbow_kv8, sil_kv8,
+    #  dbscanv8, db_modv8, epsv8, db_labv8) = variacion_no_supervisada(v8)
+
+
+    # # comparacion de resultados entre las 8 variaciones para cada algoritmo no supervisado
+    # kmeans_reports = [kmeansv1, kmeansv2, kmeansv3, kmeansv4,
+    #                 kmeansv5, kmeansv6, kmeansv7, kmeansv8]
+    # dbscan_reports = [dbscanv1, dbscanv2, dbscanv3, dbscanv4,
+    #                 dbscanv5, dbscanv6, dbscanv7, dbscanv8]
+
+    # tabla_ns = crear_tabla_no_supervisada(kmeans_reports, dbscan_reports)
+    # print(tabla_ns)
+    # graficar_tabla_comparacion(tabla_ns)
+
+
+    # kmeans_reports = [kmeansv1, kmeansv2, kmeansv3, kmeansv4,
+    #                 kmeansv5, kmeansv6, kmeansv7, kmeansv8]
+    # dbscan_reports = [dbscanv1, dbscanv2, dbscanv3, dbscanv4,
+    #                 dbscanv5, dbscanv6, dbscanv7, dbscanv8]
+    # graficar_silhouette_por_algoritmo(kmeans_reports, dbscan_reports)
+
+    #graficar Kmeans y DBSACN de la variacion 1 a la 8
+    # printeo("Graficos de Kmeans y DBSACN para variacion 1")
+    # graficar_funciones_no_supervisadas(km_silv1, Xv1, db_labv1)
+    # printeo("Graficos de Kmeans y DBSACN para variacion 2")
+    # graficar_funciones_no_supervisadas(km_silv2, Xv2, db_labv2)
+    # printeo("Graficos de Kmeans y DBSACN para variacion 3")
+    # graficar_funciones_no_supervisadas(km_silv3, Xv3, db_labv3)
+    # printeo("Graficos de Kmeans y DBSACN para variacion 4")
+    # graficar_funciones_no_supervisadas(km_silv4, Xv4, db_labv4)
+    # printeo("Graficos de Kmeans y DBSACN para variacion 5")
+    # graficar_funciones_no_supervisadas(km_silv5, Xv5, db_labv5)
+    # printeo("Graficos de Kmeans y DBSACN para variacion 6")
+    # graficar_funciones_no_supervisadas(km_silv6, Xv6, db_labv6)
+    # printeo("Graficos de Kmeans y DBSACN para variacion 7")
+    # graficar_funciones_no_supervisadas(km_silv7, Xv7, db_labv7)
+    # printeo("Graficos de Kmeans y DBSACN para variacion 8")
+    # graficar_funciones_no_supervisadas(km_silv8, Xv8, db_labv8)
